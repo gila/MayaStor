@@ -8,7 +8,6 @@ with pkgs;
 mkShell {
   buildInputs = [
     binutils
-    gcc
     git
     gptfdisk
     libaio
@@ -17,14 +16,13 @@ mkShell {
     nasm
     nodejs-10_x
     numactl
-    nvme-cli
-    openiscsi
+    
+    
     openssl
     pkgconfig
     protobuf
     python3
     rdma-core
-    stdenv
     utillinux
     xfsprogs
   ];
