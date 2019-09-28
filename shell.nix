@@ -9,8 +9,6 @@ mkShell {
   buildInputs = [
     bash
     binutils
-    clang
-    figlet
     gcc
     git
     gptfdisk
@@ -18,7 +16,6 @@ mkShell {
     libiscsi
     libuuid
     llvmPackages.libclang
-    lolcat
     nasm
     nodejs-10_x
     numactl
@@ -29,7 +26,6 @@ mkShell {
     protobuf
     python3
     rdma-core
-    rustup
     stdenv
     utillinux
     xfsprogs

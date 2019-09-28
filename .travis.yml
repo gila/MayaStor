@@ -6,13 +6,13 @@ cache:
     - mayastor-test/node_modules
 
 before_script:
+  - sudo mkdir /etc/nix && echo 'sandbox = true' | sudo tee /etc/nix/nix.conf
   - sudo modprobe nbd
   - sudo modprobe iscsi_tcp
   - sudo modprobe xfs
   - sudo sysctl -w vm.nr_hugepages=512
   - source $HOME/.nvm/nvm.sh
   - nvm install 10
-  - curl -sSf https://build.travis-ci.org/files/rustup-init.sh | sh -s -- --default-toolchain=nightly -y
   - git submodule update --init --recursive
 
 language: nix
