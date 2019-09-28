@@ -7,13 +7,11 @@ with pkgs;
 
 mkShell {
   buildInputs = [
-    bash
     binutils
     gcc
     git
     gptfdisk
     libaio
-    libiscsi
     libuuid
     llvmPackages.libclang
     nasm
