@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+cd spdk-sys/spdk
+./configure --enable-debug 
+exit
 spdk-sys/build.sh --enable-debug
 cargo build --all
 
