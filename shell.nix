@@ -13,6 +13,7 @@ stdenv.mkDerivation rec {
     gptfdisk
     libaio
     libuuid
+    libiscsi
     llvmPackages.libclang
     nasm
     nodejs-10_x
