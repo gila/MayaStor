@@ -5,7 +5,12 @@
 }:
 with pkgs;
 
-mkShell {
+stdenv.mkDerivation rec 
+{
+  name = "MayaStor";
+  src = builtins.filterSource
+    (path: type: baseNameOf path != ".git")
+    ./.;
   buildInputs = [
     bash
     binutils
@@ -28,13 +33,14 @@ mkShell {
     rdma-core
     stdenv
     utillinux
+    rustup
     xfsprogs
   ];
+
 
   LIBCLANG_PATH="${pkgs.llvmPackages.libclang}/lib";
   PROTOC="${pkgs.protobuf}/bin/protoc";
   PROTOC_INCLUDE="${pkgs.protobuf}/include";
-
   shellHook = ''
         echo
         echo

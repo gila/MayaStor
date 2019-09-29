@@ -1,61 +1,56 @@
-{ stdenv, binutils, libaio, libuuid, numactl, openssl, python, rdma-core
-, fetchFromGitHub, callPackage}:
-
-let
-  libiscsi = callPackage ../libiscsi{};
-in
+{ srcin ? null, stdenv, git, binutils, libaio, libuuid, numactl, openssl, python, rdma-core
+, fetchFromGitHub, nasm, callPackage, libiscsi}:
 
 stdenv.mkDerivation rec {
   version = "19.07.x-mayastor";
-  pname = "spdk";
-  src = fetchFromGitHub {
-    rev = "1274d250a6f49731aecbbcc925fff208a25f4b95";
-    repo = "spdk";
-    owner = "openebs";
-    sha256 = "148dp6nm8a2dglc8wk5yakjjd8r6s6drn1afff5afafa50fkcjgd";
-    fetchSubmodules = true;
-  };
+  name = "libspdk";
+  #src = fetchFromGitHub {
+  #  rev = "1274d250a6f49731aecbbcc925fff208a25f4b95";
+  #  repo = "pdk";
+  #  owner = "openebs";
+  #  sha256 = "148dp6nm8a2dglc8wk5yakjjd8r6s6drn1afff5afafa50fkcjgd";
+  #  fetchSubmodules = true;
+  #};
+
+  src = srcin;
 
   buildInputs = [
-    libiscsi
     binutils
     libaio
+    libiscsi
     libuuid
+    nasm
     numactl
     openssl
     python
     rdma-core
   ];
 
-  RTE_TARGET = "x86_64-nhm-linuxapp-gcc";
-
   CONFIGURE_OPTS =
-    "--enable-debug --with-iscsi-initiator --with-rdma --with-internal-vhost-lib --disable-tests";
+    "--enable-debug --without-isal --with-iscsi-initiator --with-rdma  \ 
+    --with-internal-vhost-lib --disable-tests --with-dpdk-machine=native";
+  
   enableParallelBuilding = true;
-  postPatch = "patchShebangs configure scripts/detect_cc.sh";
-
-  #preConfigure = ''
-  #	cat >>${src}/dpdk/config/defconfig_$RTE_TARGET <<EOF
-  #	include "common_linux"
-  #	CONFIG_RTE_MACHINE="default"
-  #	CONFIG_RTE_ARCH="x86_64"
-  #	CONFIG_RTE_ARCH_X86_64=y
-  #	CONFIG_RTE_ARCH_X86=y
-  #	CONFIG_RTE_ARCH_64=y
-  #	CONFIG_RTE_TOOLCHAIN="gcc"
-  #	CONFIG_RTE_TOOLCHAIN_GCC=y
-  #	EOF
-  #	'';
+  
+  postPatch ='' 
+    patchShebangs ./.
+    substituteInPlace dpdk/config/defconfig_x86_64-native-linux-gcc --replace native default
+    substituteInPlace Makefile --replace examples ""
+    substituteInPlace Makefile --replace app ""
+  '';
 
   NIX_CFLAGS_COMPILE = "-mno-movbe -mno-lzcnt -mno-bmi -mno-bmi2 -march=corei7";
   hardeningDisable = [ "all" ];
 
   configurePhase = ''
-    ./configure $CONFIGURE_OPTS
+    DESTDIR=$out ./configure $CONFIGURE_OPTS
   '';
 
   buildPhase = ''
     TARGET_ARCHITECTURE=corei7 make -j4
+
+    # this should not be needed in the future as fixes are upstream that
+    # are supposed to fix the shared lib building.
 
     find . -type f -name 'libspdk_ut_mock.a' -delete
     find . -type f -name 'librte_vhost.a' -delete
@@ -69,6 +64,8 @@ stdenv.mkDerivation rec {
 
   installPhase = ''
     mkdir -p $out/lib
+    mkdir -p $out/usr/local
+    cp -ar include $out/usr/local
     cp libspdk_fat.so $out/lib
   '';
 
