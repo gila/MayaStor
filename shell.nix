@@ -5,7 +5,8 @@
 }:
 with pkgs;
 
-mkShell {
+stdenv.mkDerivation rec {
+  name = "mayastor";
   buildInputs = [
     binutils
     git
