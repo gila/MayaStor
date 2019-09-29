@@ -18,4 +18,4 @@ before_script:
 language: nix
 
 script:
-  - nix-shell --run ./test.sh
+  - nix-shell --pure --run ./test.sh
