@@ -81,7 +81,7 @@ pub fn start() {
         let pool = LocalPool::new();
         let spawner = pool.spawner();
         let poller =
-            unsafe { spdk_poller_register(Some(tick), ptr::null_mut(), 1000) };
+            unsafe { spdk_poller_register(Some(tick), ptr::null_mut(), 0) };
 
         *ctx_maybe = Some(ExecutorCtx {
             pool: RefCell::new(pool),
@@ -186,7 +186,7 @@ extern "C" fn tick(_ptr: *mut c_void) -> i32 {
                 let ctx = ctx_maybe.as_ref().unwrap();
                 // Tasks which are generated while the executor runs are
                 // left in the queue until the tick() is called again.
-                let _work = ctx.pool.borrow_mut().try_run_one();
+                let _work = ctx.pool.borrow_mut().run_until_stalled();
             }
         }
     });

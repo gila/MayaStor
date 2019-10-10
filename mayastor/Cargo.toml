@@ -30,3 +30,4 @@ url_serde = "0.2.0"
 uuid = { version = "0.7", features = ["v4"] }
 rpc = { path = "../rpc"}
 sysfs = { path = "../sysfs"}
+typed-arena = "1.6.1"

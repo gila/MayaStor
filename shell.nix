@@ -8,6 +8,7 @@ stdenv.mkDerivation rec {
   name = "MayaStor";
 
   buildInputs = [
+    jemalloc
     bash
     binutils
     gcc

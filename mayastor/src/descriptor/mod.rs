@@ -55,16 +55,16 @@ use std::{
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
-use crate::executor::cb_arg;
+use crate::{executor::cb_arg, syncshot, syncshot::channel};
 use futures::channel::oneshot;
 
 /// DmaBuf which is allocated from the memory pool
 #[derive(Debug)]
 pub struct DmaBuf {
     /// raw pointer to the buffer
-    buf: *mut c_void,
+    pub buf: *mut c_void,
     /// the length of the allocated buffer
-    len: usize,
+    pub len: usize,
 }
 
 impl DmaBuf {
@@ -322,6 +322,220 @@ impl Descriptor {
 }
 
 impl Drop for Descriptor {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.ch.is_null() {
+                spdk_put_io_channel(self.ch);
+            }
+            if !self.desc.is_null() {
+                spdk_bdev_close(self.desc)
+            }
+        };
+    }
+}
+/// Block Device Descriptor
+#[derive(Debug)]
+pub struct Descriptorun {
+    /// the allocated descriptor
+    pub desc: *mut spdk_bdev_desc,
+    /// the io channel
+    pub ch: *mut spdk_io_channel,
+    /// alignment requirements of the underlying bdev
+    pub alignment: u8,
+    /// the blk_size of the underlying bdev
+    pub blk_size: u32,
+}
+
+impl Descriptorun {
+    /// io completion callback which sends back the success of the IO
+    /// the io is freed and returned to the memory pool. The buffer is not freed
+    /// this is not very optimal right now, as we use oneshot channels from
+    /// futures 0.3 which (AFAIK) does not have unsync support yet.
+    extern "C" fn io_completion_cb2(
+        io: *mut spdk_bdev_io,
+        success: bool,
+        arg: *mut c_void,
+    ) {
+        let sender = unsafe {
+            Box::from_raw(arg as *const _ as *mut syncshot::Sender<Reply>)
+        };
+        unsafe {
+            spdk_bdev_free_io(io);
+        }
+
+        sender.send(success).expect("io completion error");
+    }
+
+    /// allocate zeroed memory from the memory pool with given size and proper
+    /// alignment
+    pub fn dma_zmalloc(&self, size: usize) -> Option<DmaBuf> {
+        let buf;
+        unsafe {
+            buf = spdk_dma_zmalloc(
+                size,
+                1 << self.alignment as usize,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if buf.is_null() {
+            trace!("Zmalloc for size {} failed", size);
+            None
+        } else {
+            Some(DmaBuf {
+                buf,
+                len: size,
+            })
+        }
+    }
+
+    /// allocate memory from the memory pool that is not zeroed out
+    pub fn dma_malloc(&self, size: usize) -> Option<DmaBuf> {
+        let buf;
+        unsafe {
+            buf = spdk_dma_zmalloc(
+                size,
+                1 << self.alignment as usize,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if buf.is_null() {
+            trace!("Malloc for size {} failed", size);
+            None
+        } else {
+            Some(DmaBuf {
+                buf,
+                len: size,
+            })
+        }
+    }
+
+    /// write the `buffer` to the given `offset`
+    pub fn write_at<T>(
+        &self,
+        offset: u64,
+        buffer: &DmaBuf,
+        s: &mut syncshot::Sender<T>,
+    ) -> Result<(), i32> {
+        if offset % u64::from(self.blk_size) != 0 {
+            return Err(-1);
+        }
+
+        let rc = unsafe {
+            spdk_bdev_write(
+                self.desc,
+                self.ch,
+                buffer.buf as *mut c_void,
+                offset,
+                buffer.len as u64,
+                Some(Self::io_completion_cb2),
+                s as *const _ as *mut c_void,
+            )
+        };
+
+        Ok(())
+
+        //        if rc != 0 {
+        //            return Err(rc);
+        //        }
+        //
+        //        if r.await.expect("Failed awaiting write IO") {
+        //            Ok(buffer.len as usize)
+        //        } else {
+        //            Err(-1)
+        //        }
+    }
+
+    /// read from the given `offset` into the `buffer` note that the buffer
+    /// is allocated internally and should be copied. Also its unknown to me
+    /// what will happen if you for example, where to turn this into a vec
+    /// but for sure -- not what you want.
+    pub async fn read_at(
+        &self,
+        offset: u64,
+        buffer: &mut DmaBuf,
+    ) -> Result<usize, i32> {
+        if offset % u64::from(self.blk_size) != 0 {
+            return Err(-1);
+        }
+        let (s, r) = syncshot::channel::<Reply>();
+        let rc = unsafe {
+            spdk_bdev_read(
+                self.desc,
+                self.ch,
+                buffer.buf as *mut c_void,
+                offset,
+                buffer.len as u64,
+                Some(Self::io_completion_cb2),
+                Box::into_raw(Box::new(s)) as *const _ as *mut c_void,
+            )
+        };
+
+        if rc != 0 {
+            return Err(rc);
+        }
+
+        if r.await.expect("Failed awaiting read IO") {
+            Ok(buffer.len)
+        } else {
+            Err(-1)
+        }
+    }
+
+    /// open a descriptor to the bdev with given `name` in read only or
+    /// read/write
+    pub fn open(name: &str, write_enable: bool) -> Option<Self> {
+        let bdev = bdev_lookup_by_name(name)?;
+        let mut desc: *mut spdk_bdev_desc = std::ptr::null_mut();
+
+        let rc = unsafe {
+            spdk_bdev_open(
+                bdev.as_ptr(),
+                write_enable,
+                None,
+                std::ptr::null_mut(),
+                &mut desc,
+            )
+        };
+
+        if rc != 0 {
+            return None;
+        }
+
+        let ch = unsafe { spdk_bdev_get_io_channel(desc) };
+
+        if ch.is_null() {
+            unsafe { spdk_bdev_close(desc) };
+            return None;
+        }
+
+        Some(Descriptorun {
+            desc,
+            ch,
+            alignment: bdev.alignment(),
+            blk_size: bdev.block_size(),
+        })
+    }
+
+    /// close the descriptor, any allocated buffers remain allocated and must
+    /// be dropped/freed separately consume self.
+    pub fn close(mut self) {
+        unsafe {
+            spdk_put_io_channel(self.ch);
+            spdk_bdev_close(self.desc)
+        };
+        self.ch = std::ptr::null_mut();
+        self.desc = std::ptr::null_mut();
+    }
+
+    /// return the bdev associated with this descriptor
+    pub fn get_bdev(&self) -> Bdev {
+        unsafe { Bdev::from(spdk_bdev_desc_get_bdev(self.desc)) }
+    }
+}
+
+impl Drop for Descriptorun {
     fn drop(&mut self) {
         unsafe {
             if !self.ch.is_null() {

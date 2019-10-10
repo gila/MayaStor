@@ -25,6 +25,7 @@ pub mod nvmf_target;
 pub mod pool;
 pub mod replica;
 pub mod spdklog;
+pub mod syncshot;
 
 use libc::{c_char, c_int};
 use spdk_sys::{
