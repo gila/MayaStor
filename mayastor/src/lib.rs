@@ -22,6 +22,7 @@ pub mod nexus_uri;
 pub mod nvme_dev;
 pub mod nvmf_target;
 pub mod pool;
+pub mod rebuild;
 pub mod replica;
 pub mod spdklog;
 
@@ -87,7 +88,7 @@ where
         spdk_app_opts_init(&mut opts as *mut spdk_app_opts);
         opts.rpc_addr =
             CString::new("/var/tmp/mayastor.sock").unwrap().into_raw();
-        opts.print_level = spdk_sys::SPDK_LOG_INFO;
+        opts.print_level = spdk_sys::SPDK_LOG_DEBUG;
         if spdk_app_parse_args(
             (c_args.len() as c_int) - 1,
             c_args.as_ptr() as *mut *mut i8,

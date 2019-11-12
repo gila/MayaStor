@@ -51,10 +51,10 @@ use crate::bdev::nexus::Error;
 use crate::executor::cb_arg;
 use futures::channel::oneshot;
 
-/// DmaBuf which is allocated from the memory pool
+/// DmaBuf that is allocated from the memory pool
 #[derive(Debug)]
 pub struct DmaBuf {
-    /// raw pointer to the buffer
+    /// a raw pointer to the buffer
     buf: *mut c_void,
     /// the length of the allocated buffer
     len: usize,
@@ -63,6 +63,12 @@ pub struct DmaBuf {
 impl DmaBuf {
     /// convert the buffer to a slice
     pub fn as_slice(&self) -> &[u8] {
+        if cfg!(debug_assertions) {
+            if self.buf.is_null() {
+                panic!("self.buf is null");
+            }
+        }
+
         unsafe { from_raw_parts(self.buf as *mut u8, self.len as usize) }
     }
 
@@ -71,8 +77,14 @@ impl DmaBuf {
         unsafe { from_raw_parts_mut(self.buf as *mut u8, self.len as usize) }
     }
 
-    /// file the buffer with the given value
+    /// fill the buffer with the given value
     pub fn fill(&mut self, val: u8) {
+        if cfg!(debug_assertions) {
+            if self.buf.is_null() {
+                panic!("self buf is null");
+            }
+        }
+
         unsafe {
             std::ptr::write_bytes(
                 self.as_mut_slice().as_ptr() as *mut u8,
@@ -99,11 +111,30 @@ impl DmaBuf {
             Ok(DmaBuf { buf, len: size })
         }
     }
+
+    pub fn as_ptr(self) -> *mut c_void {
+        self.buf
+    }
+}
+
+impl Deref for DmaBuf {
+    type Target = *mut c_void;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buf
+    }
+}
+
+impl DerefMut for DmaBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.buf
+    }
 }
 
 impl Drop for DmaBuf {
     fn drop(&mut self) {
         unsafe { spdk_dma_free(self.buf as *mut c_void) }
+        self.buf = std::ptr::null_mut();
     }
 }
 
@@ -124,8 +155,8 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    /// io completion callback which sends back the success of the IO
-    /// the io is freed and returned to the memory pool. The buffer is not freed
+    /// io completion callback that sends back the success status of the IO.
+    /// When the IO is freed, it is returned to the memory pool. The buffer is not freed
     /// this is not very optimal right now, as we use oneshot channels from
     /// futures 0.3 which (AFAIK) does not have unsync support yet.
     extern "C" fn io_completion_cb(
