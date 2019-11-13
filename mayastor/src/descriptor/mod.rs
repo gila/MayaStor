@@ -107,10 +107,6 @@ impl DmaBuf {
             Ok(DmaBuf { buf, len: size })
         }
     }
-
-    pub fn as_ptr(self) -> *mut c_void {
-        self.buf
-    }
 }
 
 impl Deref for DmaBuf {

@@ -1,9 +1,9 @@
+use std::process::Command;
+
 use mayastor::aio_dev::AioBdev;
 use mayastor::descriptor::Descriptor;
-use mayastor::mayastor_start;
-use mayastor::nexus_uri::BdevType::Aio;
 use mayastor::rebuild::RebuildTask;
-use std::process::Command;
+use mayastor::{mayastor_start, spdk_stop};
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -39,7 +39,7 @@ fn copy_task() {
         mayastor::executor::spawn(works());
     });
 
-    //    assert_eq!(rc, 0);
+    assert_eq!(rc, 0);
     //
     //    let output = Command::new("rm")
     //        .args(&["-rf", DISKNAME1, DISKNAME2])
@@ -73,5 +73,8 @@ async fn works() {
 
     let copy_task = RebuildTask::new(source, target).unwrap();
 
-    RebuildTask::start_rebuild(copy_task);
+    if let Some(r) = RebuildTask::start_rebuild(copy_task) {
+        let _done = r.await;
+        spdk_stop(0);
+    }
 }
