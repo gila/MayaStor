@@ -2,7 +2,7 @@ use mayastor::aio_dev::AioBdev;
 use mayastor::descriptor::Descriptor;
 use mayastor::mayastor_start;
 use mayastor::nexus_uri::BdevType::Aio;
-use mayastor::rebuild::CopyTask;
+use mayastor::rebuild::RebuildTask;
 use std::process::Command;
 
 static DISKNAME1: &str = "/tmp/disk1.img";
@@ -71,7 +71,7 @@ async fn works() {
     let source = Descriptor::open(BDEVNAME1, false).unwrap();
     let target = Descriptor::open(BDEVNAME2, true).unwrap();
 
-    let mut copy_task = CopyTask::new(source, target).unwrap();
+    let copy_task = RebuildTask::new(source, target).unwrap();
 
-    CopyTask::start_rebuild(copy_task);
+    RebuildTask::start_rebuild(copy_task);
 }

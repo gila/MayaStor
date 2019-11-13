@@ -63,10 +63,8 @@ pub struct DmaBuf {
 impl DmaBuf {
     /// convert the buffer to a slice
     pub fn as_slice(&self) -> &[u8] {
-        if cfg!(debug_assertions) {
-            if self.buf.is_null() {
-                panic!("self.buf is null");
-            }
+        if cfg!(debug_assertions) && self.buf.is_null() {
+            panic!("self.buf is null");
         }
 
         unsafe { from_raw_parts(self.buf as *mut u8, self.len as usize) }
@@ -79,10 +77,8 @@ impl DmaBuf {
 
     /// fill the buffer with the given value
     pub fn fill(&mut self, val: u8) {
-        if cfg!(debug_assertions) {
-            if self.buf.is_null() {
-                panic!("self buf is null");
-            }
+        if cfg!(debug_assertions) && self.buf.is_null() {
+            panic!("self buf is null");
         }
 
         unsafe {

@@ -1,8 +1,7 @@
 use std::os::raw::c_void;
 
 use spdk_sys::{
-    spdk_app_stop, spdk_bdev_desc, spdk_bdev_free_io, spdk_bdev_get_io_channel,
-    spdk_bdev_io, spdk_bdev_read, spdk_bdev_read_blocks,
+    spdk_app_stop, spdk_bdev_free_io, spdk_bdev_io, spdk_bdev_read_blocks,
     spdk_bdev_write_blocks, spdk_bdev_writev, spdk_bdev_writev_blocks,
     spdk_env_get_current_core, spdk_event_allocate, spdk_event_call,
 };
@@ -14,7 +13,7 @@ use crate::descriptor::Descriptor;
 /// struct that holds the state of a copy task. This struct
 /// is used during rebuild.
 #[derive(Debug)]
-pub struct CopyTask {
+pub struct RebuildTask {
     /// the source where to copy from
     source: Descriptor,
     /// the target where to copy to
@@ -26,36 +25,40 @@ pub struct CopyTask {
     // queue: VecDeque<DmaBuf>,
 }
 
-impl CopyTask {
+impl RebuildTask {
     extern "C" fn write_complete(
         io: *mut spdk_bdev_io,
-        success: bool,
+        _success: bool,
         arg: *mut c_void,
     ) {
-        let mut task = unsafe { Box::from_raw(arg as *mut CopyTask) };
+        let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
         let source_io = task.source_io.take().unwrap();
         unsafe {
             spdk_bdev_free_io(io);
             spdk_bdev_free_io(source_io);
         }
 
-        if let Ok(next) = task.dispatch_next_block() {
-            if next == true {
-                info!(
+        match task.dispatch_next_block() {
+            Ok(next) => {
+                if next {
+                    info!(
                     "Rebuild completed at {:?} from {} to {} completed successfully!",
                     std::time::SystemTime::now(),
                     task.source.get_bdev().name(),
                     task.target.get_bdev().name()
                 );
-                std::mem::drop(task);
-                unsafe {
-                    spdk_app_stop(0);
+
+                    unsafe {
+                        spdk_app_stop(0);
+                    }
+                } else {
+                    // we are not done yet, forget the task to avoid dropping
+                    std::mem::forget(task);
                 }
-            } else {
-                std::mem::forget(task);
             }
-        } else {
-            panic!("error in rebuild");
+            Err(..) => {
+                panic!("error in rebuild");
+            }
         }
     }
 
@@ -64,7 +67,7 @@ impl CopyTask {
         success: bool,
         arg: *mut c_void,
     ) {
-        let mut task = unsafe { Box::from_raw(arg as *mut CopyTask) };
+        let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
         if success {
             unsafe {
                 let bio = Bio::from(io);
@@ -154,13 +157,13 @@ impl CopyTask {
         }
     }
 
-    extern "C" fn rebuild_task(copy_task: *mut c_void, arg2: *mut c_void) {
-        let mut task = unsafe { Box::from_raw(copy_task as *mut CopyTask) };
-        let next = task.dispatch_next_block();
+    extern "C" fn rebuild_task(copy_task: *mut c_void, _arg2: *mut c_void) {
+        let mut task = unsafe { Box::from_raw(copy_task as *mut RebuildTask) };
+        let _next = task.dispatch_next_block();
         std::mem::forget(task);
     }
 
-    pub fn start_rebuild(task: Box<CopyTask>) {
+    pub fn start_rebuild(task: Box<RebuildTask>) {
         let current_core = unsafe { spdk_env_get_current_core() };
         trace!("Will start rebuild task on core {}", current_core);
         trace!("rebuild started at: {:?}", std::time::SystemTime::now());
