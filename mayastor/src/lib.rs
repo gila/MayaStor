@@ -24,15 +24,16 @@ pub mod nvmf_target;
 pub mod pool;
 pub mod rebuild;
 pub mod replica;
+pub mod scanner;
 pub mod spdklog;
-
 use libc::{c_char, c_int};
 use spdk_sys::{
     spdk_app_fini, spdk_app_opts, spdk_app_opts_init, spdk_app_parse_args,
-    spdk_app_start, spdk_app_stop,
+    spdk_app_start, spdk_app_stop, SPDK_LOG_WARN,
 };
 use std::{
     boxed::Box,
+    env,
     ffi::{c_void, CString},
     iter::Iterator,
     ptr::null_mut,
@@ -88,7 +89,22 @@ where
         spdk_app_opts_init(&mut opts as *mut spdk_app_opts);
         opts.rpc_addr =
             CString::new("/var/tmp/mayastor.sock").unwrap().into_raw();
-        opts.print_level = spdk_sys::SPDK_LOG_DEBUG;
+
+        if let Ok(log_level) = env::var("MAYASTOR_LOGLEVEL") {
+            opts.print_level = match log_level.parse() {
+                Ok(-1) => spdk_sys::SPDK_LOG_DISABLED,
+                Ok(0) => spdk_sys::SPDK_LOG_ERROR,
+                Ok(1) => spdk_sys::SPDK_LOG_WARN,
+                Ok(2) => spdk_sys::SPDK_LOG_NOTICE,
+                Ok(3) => spdk_sys::SPDK_LOG_INFO,
+                Ok(4) => spdk_sys::SPDK_LOG_DEBUG,
+                // default
+                _ => spdk_sys::SPDK_LOG_DEBUG,
+            }
+        } else {
+            opts.print_level = spdk_sys::SPDK_LOG_WARN;
+        }
+
         if spdk_app_parse_args(
             (c_args.len() as c_int) - 1,
             c_args.as_ptr() as *mut *mut i8,

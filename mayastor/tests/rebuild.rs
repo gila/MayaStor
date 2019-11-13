@@ -1,8 +1,7 @@
-use std::process::Command;
-
 use mayastor::aio_dev::AioBdev;
 use mayastor::descriptor::Descriptor;
 use mayastor::rebuild::RebuildTask;
+use mayastor::scanner::{ScannerTask, ScannerTaskTrait};
 use mayastor::{mayastor_start, spdk_stop};
 
 static DISKNAME1: &str = "/tmp/disk1.img";
@@ -11,42 +10,22 @@ static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
 static DISKNAME2: &str = "/tmp/disk2.img";
 static BDEVNAME2: &str = "aio:///tmp/disk2.img?blk_size=512";
 
+mod common;
 #[test]
 fn copy_task() {
-    let log = mayastor::spdklog::SpdkLog::new();
-    let _ = log.init();
-
-    mayastor::CPS_INIT!();
-    let args = vec!["-c", "../etc/test.conf"];
+    common::mayastor_test_init();
+    let args = vec!["rebuild_task"];
 
     // setup our test files
-
-    let output = Command::new("truncate")
-        .args(&["-s", "64m", DISKNAME1])
-        .output()
-        .expect("failed exec truncate");
-
-    assert_eq!(output.status.success(), true);
-
-    let output = Command::new("truncate")
-        .args(&["-s", "64m", DISKNAME2])
-        .output()
-        .expect("failed exec truncate");
-
-    assert_eq!(output.status.success(), true);
+    common::create_disk(DISKNAME1, "64m");
+    common::create_disk(DISKNAME2, "64m");
 
     let rc: i32 = mayastor_start("test", args, || {
         mayastor::executor::spawn(works());
     });
 
     assert_eq!(rc, 0);
-    //
-    //    let output = Command::new("rm")
-    //        .args(&["-rf", DISKNAME1, DISKNAME2])
-    //        .output()
-    //        .expect("failed delete test file");
-    //
-    //    assert_eq!(output.status.success(), true);
+    common::delete_disk(&[DISKNAME1.into(), DISKNAME2.into()])
 }
 
 async fn create_bdevs() {
@@ -75,6 +54,18 @@ async fn works() {
 
     if let Some(r) = RebuildTask::start_rebuild(copy_task) {
         let _done = r.await;
-        spdk_stop(0);
+    }
+
+    scan().await;
+}
+
+async fn scan() {
+    let source = Descriptor::open(BDEVNAME1, false).unwrap();
+    let target = Descriptor::open(BDEVNAME2, true).unwrap();
+
+    let scan = ScannerTask::new(source, target).unwrap();
+    if let Some(r) = ScannerTask::start_task(scan, Some(0)) {
+        let done = r.await;
+        dbg!(done);
     }
 }
