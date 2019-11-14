@@ -23,78 +23,9 @@ pub trait ScannerTaskTrait {
         ctx: *mut c_void,
     );
 
-    extern "C" fn scan_progress(task: *mut c_void) -> i32;
-
-    fn dispatch_next_segment(&mut self) -> Result<bool, Error>;
-
     fn task_from_ctx(ctx: *mut c_void) -> Box<ScannerTask> {
         unsafe { Box::from_raw(ctx as *const _ as *mut ScannerTask) }
     }
-
-    extern "C" fn _start_scanning(copy_task: *mut c_void, _arg2: *mut c_void) {
-        let task = Self::task_from_ctx(copy_task);
-
-        match task.dispatch_next_segment() {
-            Err(next) => {
-                error!("{:?}", next);
-                let _ = task.sender.unwrap().send(false);
-            }
-            Ok(..) => {
-                std::mem::forget(task);
-            }
-        }
-    }
-
-    fn start_task(
-        mut task: Box<ScannerTask>,
-        core: Option<u32>,
-    ) -> Option<oneshot::Receiver<bool>> {
-        let core = if let Some(core) = core { core } else { 0 };
-
-        let (s, r) = oneshot::channel::<bool>();
-        task.sender = Some(s);
-
-        let poller = unsafe {
-            spdk_poller_register(
-                Some(Self::scan_progress),
-                &*task as *const _ as *mut _,
-                1_000_000,
-            )
-        };
-
-        if poller.is_null() {
-            error!("failed to register poller for rebuild task");
-            return None;
-        }
-
-        task.progress = Some(poller);
-
-        let event = unsafe {
-            spdk_event_allocate(
-                core,
-                Some(Self::_start_scanning),
-                Box::into_raw(task) as *mut c_void,
-                std::ptr::null_mut(),
-            )
-        };
-
-        if event.is_null() {
-            return None;
-        }
-
-        // cant fail?
-        unsafe {
-            // the event will be put back into the mem pool when the reactor de-queues it
-            spdk_event_call(event);
-        }
-
-        Some(r)
-    }
-
-    fn source_io_hold(
-        &mut self,
-        io: *mut spdk_bdev_io,
-    ) -> Option<*mut spdk_bdev_io>;
 }
 
 /// struct that holds the state of a copy task. This struct
@@ -161,6 +92,109 @@ impl ScannerTask {
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(true);
         }
+    }
+
+    extern "C" fn scan_progress(task: *mut c_void) -> i32 {
+        let task = Self::task_from_ctx(task);
+        info!("scan: current lba {}", task.current_lba);
+        std::mem::forget(task);
+        0
+    }
+
+    extern "C" fn _start_scanning(copy_task: *mut c_void, _arg2: *mut c_void) {
+        let mut task = Self::task_from_ctx(copy_task);
+
+        match task.dispatch_next_segment() {
+            Err(next) => {
+                error!("{:?}", next);
+                let _ = task.sender.unwrap().send(false);
+            }
+            Ok(..) => {
+                std::mem::forget(task);
+            }
+        }
+    }
+
+    pub fn start_task(
+        mut task: Box<ScannerTask>,
+        core: Option<u32>,
+    ) -> Option<oneshot::Receiver<bool>> {
+        let core = if let Some(core) = core { core } else { 0 };
+
+        let (s, r) = oneshot::channel::<bool>();
+        task.sender = Some(s);
+
+        let poller = unsafe {
+            spdk_poller_register(
+                Some(Self::scan_progress),
+                &*task as *const _ as *mut _,
+                1_000_000,
+            )
+        };
+
+        if poller.is_null() {
+            error!("failed to register poller for rebuild task");
+            return None;
+        }
+
+        task.progress = Some(poller);
+
+        let event = unsafe {
+            spdk_event_allocate(
+                core,
+                Some(Self::_start_scanning),
+                Box::into_raw(task) as *mut c_void,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if event.is_null() {
+            return None;
+        }
+
+        // cant fail?
+        unsafe {
+            // the event will be put back into the mem pool when the reactor de-queues it
+            spdk_event_call(event);
+        }
+
+        Some(r)
+    }
+    fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
+        if self.current_lba < self.source.get_bdev().num_blocks() {
+            let ret = unsafe {
+                spdk_bdev_read_blocks(
+                    self.source.desc,
+                    self.source.ch,
+                    std::ptr::null_mut(),
+                    self.current_lba,
+                    1,
+                    Some(Self::source_complete),
+                    &*self as *const _ as *mut _,
+                )
+            };
+
+            // if we failed to dispatch the IO, we will redo it later return Ok(false)
+            if ret == 0 {
+                self.current_lba += 1;
+                Ok(false)
+            } else {
+                // for now fail on all errors; typically with ENOMEM we should retry
+                // however, we want to delay this so likely use a (one time) poller?
+                Err(Error::Internal("failed to dispatch IO".into()))
+            }
+        } else {
+            assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
+            trace!("scan task completed! \\o/");
+            Ok(true)
+        }
+    }
+
+    fn source_io_hold(
+        &mut self,
+        io: *mut spdk_bdev_io,
+    ) -> Option<*mut spdk_bdev_io> {
+        self.source_io.replace(io)
     }
 }
 
@@ -230,49 +264,5 @@ impl ScannerTaskTrait for ScannerTask {
                 panic!("meh");
             }
         }
-    }
-
-    extern "C" fn scan_progress(task: *mut c_void) -> i32 {
-        let task = Self::task_from_ctx(task);
-        info!("scan: current lba {}", task.current_lba);
-        std::mem::forget(task);
-        0
-    }
-
-    fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
-        if self.current_lba < self.source.get_bdev().num_blocks() {
-            let ret = unsafe {
-                spdk_bdev_read_blocks(
-                    self.source.desc,
-                    self.source.ch,
-                    std::ptr::null_mut(),
-                    self.current_lba,
-                    1,
-                    Some(Self::source_complete),
-                    &*self as *const _ as *mut _,
-                )
-            };
-
-            // if we failed to dispatch the IO, we will redo it later return Ok(false)
-            if ret == 0 {
-                self.current_lba += 1;
-                Ok(false)
-            } else {
-                // for now fail on all errors; typically with ENOMEM we should retry
-                // however, we want to delay this so likely use a (one time) poller?
-                Err(Error::Internal("failed to dispatch IO".into()))
-            }
-        } else {
-            assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
-            trace!("scan task completed! \\o/");
-            Ok(true)
-        }
-    }
-
-    fn source_io_hold(
-        &mut self,
-        io: *mut spdk_bdev_io,
-    ) -> Option<*mut spdk_bdev_io> {
-        self.source_io.replace(io)
     }
 }
