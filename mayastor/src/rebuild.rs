@@ -12,17 +12,21 @@ use crate::bdev::nexus::nexus_io::Bio;
 use crate::bdev::nexus::Error;
 use crate::descriptor::{Descriptor, DmaBuf};
 use futures::channel::oneshot;
+use std::convert::TryInto;
+use crate::scanner::BlockTraverser;
+use std::time::SystemTime;
 
 /// struct that holds the state of a copy task. This struct
 /// is used during rebuild.
 #[derive(Debug)]
 pub struct RebuildTask {
     /// the source where to copy from
-    source: Descriptor,
+    pub source: Descriptor,
     /// the target where to copy to
-    target: Descriptor,
+    pub target: Descriptor,
     /// the last LBA for which an io copy has been submitted
     current_lba: u64,
+    previous_lba: u64,
     /// the IO we are rebuilding
     source_io: Option<*mut spdk_bdev_io>,
     /// an optional sender for us to call send our completion too
@@ -32,40 +36,41 @@ pub struct RebuildTask {
     num_segments: u64,
     remainder: u32,
     buf: DmaBuf,
+    blocks_per_segment: u32,
+    start_time: Option<SystemTime>,
     // queue IO to dispatch during next poller run
     // queue: VecDeque<DmaBuf>,
 }
 
+
 impl RebuildTask {
+    fn shutdown(&mut self, success: bool) {
+        self.stop_progress();
+        self.send_completion(success);
+    }
+
     extern "C" fn write_complete(
         io: *mut spdk_bdev_io,
-        _success: bool,
+        success: bool,
         arg: *mut c_void,
     ) {
-        info!("write complete");
         let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
-        //        let bio = Bio::from(io);
-        //
-        //        assert_eq!(bio.offset(), sio.offset());
-        //        assert_eq!(bio.num_blocks(), sio.num_blocks());
-
-        unsafe {
-            spdk_bdev_free_io(io);
-            //info!("{:p} : {:p}", sio, io);
-            // spdk_bdev_io_complete(sio, SPDK_BDEV_IO_STATUS_SUCCESS);
-        }
+        Bio::io_free(io);
 
         match task.dispatch_next_segment() {
             Ok(next) => {
                 if next {
+                    let elapsed = task.start_time.unwrap().elapsed().unwrap();
+                    let mbs = (task.source.get_bdev().block_len() as u64 * task.source.get_bdev().num_blocks()) >> 20;
                     info!(
-                        "Rebuild completed at {:?} from {} to {} completed successfully!",
-                        std::time::SystemTime::now(),
+                        "Rebuild completed after {:.} seconds total of {} ({}MBs) from {} to {}",
+                        elapsed.as_secs(),
+                        mbs,
+                        mbs / elapsed.as_secs(),
                         task.source.get_bdev().name(),
                         task.target.get_bdev().name());
 
-                    task.stop_progress();
-                    task.send_completion();
+                    task.shutdown(success)
                 } else {
                     // we are not done yet, forget the task to avoid dropping
                     std::mem::forget(task);
@@ -83,44 +88,34 @@ impl RebuildTask {
     extern "C" fn read_complete(
         io: *mut spdk_bdev_io,
         success: bool,
-        arg: *mut c_void,
+        ctx: *mut c_void,
     ) {
-        info!("read complete");
-        let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
+        let mut task = unsafe { Box::from_raw(ctx as *mut RebuildTask) };
         if success {
-            unsafe {
-                let bio = Bio::from(io);
-                let desc = task.target.desc;
-                let ch = task.target.ch;
+            let bio = Bio::from(io);
 
-                dbg!(&bio);
-
-                let rc = spdk_bdev_write(
-                    desc,
-                    ch,
+            let rc = unsafe {
+                spdk_bdev_write(
+                    task.target.desc,
+                    task.target.ch,
                     task.buf.buf,
-                    bio.offset(),
-                    bio.num_blocks() * 512,
+                    bio.offset() * task.source.get_bdev().block_len() as u64,
+                    bio.num_blocks() * task.source.get_bdev().block_len() as u64,
                     Some(Self::write_complete),
                     Box::into_raw(task) as *const _ as *mut _,
-                );
+                )
+            };
 
-                if rc != 0 {
-                    panic!("ret {}", rc);
-                }
+            // queue the IO
+
+            if rc != 0 {
+                panic!("ret {}", rc);
             }
         } else {
-            // the task will be dropped here the receiver would be cancelled too
-            warn!("rebuild IO failed!");
-            unsafe {
-                spdk_bdev_free_io(io);
-            }
+            task.shutdown(false);
         }
 
-        unsafe {
-            spdk_bdev_free_io(io);
-        }
-        trace!("exit here: {}", success);
+        Bio::io_free(io);
     }
 
     /// return a new rebuild task
@@ -143,25 +138,45 @@ impl RebuildTask {
             return Err(Error::Invalid(error));
         }
 
-        let buf = source
-            .dma_malloc((128 * source.get_bdev().block_len()) as usize)
-            .unwrap();
 
         let num_blocks = target.get_bdev().num_blocks();
+        let block_len = target.get_bdev().block_len();
+        let blocks_per_segment = u64::from(SPDK_BDEV_LARGE_BUF_MAX_SIZE / block_len);
+
+        let num_segments = num_blocks / blocks_per_segment as u64;
+        let remainder = num_blocks % blocks_per_segment;
+
+        let buf = source
+            .dma_malloc((blocks_per_segment * source.get_bdev().block_len() as u64) as usize)
+            .unwrap();
 
         Ok(Box::new(Self {
-            source,
-            target,
-            current_lba,
-            source_io: None,
-            sender: None,
-            remainder: (num_blocks % 128) as u32,
-            num_segments: num_blocks / 128,
-            progress: None,
+            blocks_per_segment: blocks_per_segment as u32,
             buf,
+            current_lba,
+            num_segments,
+            previous_lba: 0,
+            progress: None,
+            remainder: remainder.try_into().unwrap(),
+            sender: None,
+            source,
+            source_io: None,
+            target,
+            start_time: None,
         }))
     }
 
+    #[inline]
+    fn next_segment(&mut self) -> u32 {
+        let num_blocks = if self.num_segments > 0 {
+            self.blocks_per_segment
+        } else {
+            self.num_segments += 1;
+            self.remainder
+        };
+
+        num_blocks
+    }
     /// Copy blocks from source to target with increments of one block (for now).
     /// When the task has been completed, this function returns Ok(true). When a new IO
     /// has been successfully dispatched in returns Ok(false)
@@ -171,11 +186,12 @@ impl RebuildTask {
     /// and not internally
     ///
     pub fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
-        let num_blocks = if self.num_segments > 0 {
-            128
-        } else {
-            self.remainder
-        };
+        let next_segment = self.next_segment();
+        if next_segment == 0 {
+            self.shutdown(true);
+            return Ok(true);
+        }
+
         if self.current_lba < self.source.get_bdev().num_blocks() {
             let ret = unsafe {
                 spdk_bdev_read_blocks(
@@ -183,25 +199,25 @@ impl RebuildTask {
                     self.source.ch,
                     self.buf.buf,
                     self.current_lba,
-                    num_blocks as u64,
+                    next_segment as u64,
                     Some(Self::read_complete),
                     &*self as *const _ as *mut _,
                 )
             };
 
-            // if we failed to dispatch the IO, we will redo it later return Ok(false)
             if ret == 0 {
-                self.current_lba += num_blocks as u64;
+                self.current_lba += next_segment as u64;
+                self.num_segments -= 1;
                 Ok(false)
             } else {
-                dbg!(ret);
-                // for now fail on all errors; typically with ENOMEM we should retry
-                // however, we want to delay this so likely use a (one time) poller?
+                /// we should be able to retry later for now fail on all errors; typically with
+                /// ENOMEM we should retry however, we want to delay this so likely use a
+                /// (one time) poller?
                 Err(Error::Internal("failed to dispatch IO".into()))
             }
         } else {
             assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
-            trace!("scan task completed! \\o/");
+            trace!("Rebuild task completed! \\o/");
             Ok(true)
         }
     }
@@ -216,20 +232,23 @@ impl RebuildTask {
     }
 
     /// send the waiter that we completed successfully
-    fn send_completion(&mut self) {
+    fn send_completion(&mut self, success: bool) {
         if let Some(sender) = self.sender.take() {
-            let _ = sender.send(true);
+            let _ = sender.send(success);
         }
     }
 
     extern "C" fn progress(copy_task: *mut c_void) -> i32 {
-        let task = unsafe { Box::from_raw(copy_task as *mut RebuildTask) };
+        let mut task = unsafe { Box::from_raw(copy_task as *mut RebuildTask) };
         info!(
-            "Rebuild from {} to {} with blocks to go: {}",
+            "Rebuild from {} to {} MiBs: {}",
             task.source.get_bdev().name(),
             task.target.get_bdev().name(),
-            task.source.get_bdev().num_blocks() - task.current_lba
+            ((task.current_lba - task.previous_lba) * task.source.get_bdev().block_len() as u64 >> 20) * 2
         );
+
+        task.previous_lba = task.current_lba;
+
         std::mem::forget(task);
         0
     }
@@ -237,7 +256,7 @@ impl RebuildTask {
     /// the actual start rebuild task in FFI context
     extern "C" fn _start_rebuild(copy_task: *mut c_void, _arg2: *mut c_void) {
         let mut task = unsafe { Box::from_raw(copy_task as *mut RebuildTask) };
-
+        task.start_time = Some(std::time::SystemTime::now());
         match task.dispatch_next_segment() {
             Err(next) => {
                 error!("{:?}", next);
@@ -287,9 +306,7 @@ impl RebuildTask {
             return None;
         }
 
-        // cant fail?
         unsafe {
-            // the event will be put back into the mem pool when the reactor de-queues it
             spdk_event_call(event);
         }
 

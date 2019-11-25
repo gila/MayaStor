@@ -12,7 +12,7 @@ use crate::descriptor::Descriptor;
 use futures::channel::oneshot;
 
 #[derive(Debug)]
-pub enum BlockTraverser {
+pub enum Traverse {
     Init,
     Reading,
     Writing,
@@ -20,7 +20,7 @@ pub enum BlockTraverser {
     Completed,
 }
 
-pub trait ScannerTaskTrait {
+pub trait BlockTraverser {
     extern "C" fn source_complete(
         io: *mut spdk_bdev_io,
         success: bool,
@@ -55,7 +55,7 @@ pub struct ScannerTask {
     progress: Option<*mut spdk_poller>,
     // queue IO to dispatch during next poller run
     // queue: VecDeque<DmaBuf>,
-    traverser: BlockTraverser,
+    traverser: Traverse,
     num_segments: u64,
     remainder: u32,
 }
@@ -92,7 +92,7 @@ impl ScannerTask {
             remainder: (num_blocks % 128) as u32,
             num_segments: num_blocks / 128,
             progress: None,
-            traverser: BlockTraverser::Init,
+            traverser: Traverse::Init,
         }))
     }
 
@@ -177,12 +177,14 @@ impl ScannerTask {
 
         Some(r)
     }
+
     fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
         let num_blocks = if self.num_segments > 0 {
             128
         } else {
             self.remainder
         };
+
         if self.current_lba < self.source.get_bdev().num_blocks() {
             let ret = unsafe {
                 spdk_bdev_read_blocks(
@@ -198,7 +200,7 @@ impl ScannerTask {
 
             // if we failed to dispatch the IO, we will redo it later return Ok(false)
             if ret == 0 {
-                self.traverser = BlockTraverser::Reading;
+                self.traverser = Traverse::Reading;
                 self.current_lba += num_blocks as u64;
                 Ok(false)
             } else {
@@ -207,7 +209,7 @@ impl ScannerTask {
                 Err(Error::Internal("failed to dispatch IO".into()))
             }
         } else {
-            self.traverser = BlockTraverser::Completed;
+            self.traverser = Traverse::Completed;
             assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
             trace!("scan task completed! \\o/");
             Ok(true)
@@ -222,7 +224,7 @@ impl ScannerTask {
     }
 }
 
-impl ScannerTaskTrait for ScannerTask {
+impl BlockTraverser for ScannerTask {
     extern "C" fn source_complete(
         io: *mut spdk_bdev_io,
         success: bool,

@@ -1,14 +1,15 @@
 use mayastor::aio_dev::AioBdev;
 use mayastor::descriptor::Descriptor;
 use mayastor::rebuild::RebuildTask;
-use mayastor::scanner::{ScannerTask, ScannerTaskTrait};
+use mayastor::scanner::{ScannerTask, BlockTraverser};
 use mayastor::{mayastor_start, spdk_stop};
+use spdk_sys::spdk_app_stop;
 
-static DISKNAME1: &str = "/tmp/disk1.img";
-static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
+static DISKNAME1: &str = "/code/source.img";
+static BDEVNAME1: &str = "aio:///code/source.img?blk_size=512";
 
-static DISKNAME2: &str = "/tmp/disk2.img";
-static BDEVNAME2: &str = "aio:///tmp/disk2.img?blk_size=512";
+static DISKNAME2: &str = "/code/target.img";
+static BDEVNAME2: &str = "aio:///code/target.img?blk_size=512";
 
 mod common;
 #[test]
@@ -17,14 +18,14 @@ fn copy_task() {
     let args = vec!["rebuild_task"];
 
     // setup our test files
-    common::create_disk(DISKNAME1, "1GB");
-    common::create_disk(DISKNAME2, "1GB");
+//    common::create_disk(DISKNAME1, "1GB");
+  //  common::create_disk(DISKNAME2, "1GB");
 
     let rc: i32 = mayastor_start("test", args, || {
         mayastor::executor::spawn(works());
     });
 
-    assert_eq!(rc, 0);
+   // assert_eq!(rc, 0);
     //  common::delete_disk(&[DISKNAME1.into(), DISKNAME2.into()])
 }
 
@@ -53,10 +54,14 @@ async fn works() {
     let copy_task = RebuildTask::new(source, target).unwrap();
 
     if let Some(r) = RebuildTask::start_rebuild(copy_task) {
-        let _done = r.await;
+        let done = r.await;
+        unsafe {
+            spdk_stop(0);
+        }
+
     }
 
-    scan().await;
+   // scan().await;
 }
 
 async fn scan() {
