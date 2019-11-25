@@ -11,6 +11,15 @@ use crate::bdev::nexus::Error;
 use crate::descriptor::Descriptor;
 use futures::channel::oneshot;
 
+#[derive(Debug)]
+pub enum BlockTraverser {
+    Init,
+    Reading,
+    Writing,
+    Error,
+    Completed,
+}
+
 pub trait ScannerTaskTrait {
     extern "C" fn source_complete(
         io: *mut spdk_bdev_io,
@@ -46,6 +55,9 @@ pub struct ScannerTask {
     progress: Option<*mut spdk_poller>,
     // queue IO to dispatch during next poller run
     // queue: VecDeque<DmaBuf>,
+    traverser: BlockTraverser,
+    num_segments: u64,
+    remainder: u32,
 }
 
 impl ScannerTask {
@@ -69,13 +81,18 @@ impl ScannerTask {
             return Err(Error::Invalid(error));
         }
 
+        let num_blocks = target.get_bdev().num_blocks();
+
         Ok(Box::new(Self {
             source,
             target,
             current_lba,
             source_io: None,
             sender: None,
+            remainder: (num_blocks % 128) as u32,
+            num_segments: num_blocks / 128,
             progress: None,
+            traverser: BlockTraverser::Init,
         }))
     }
 
@@ -161,6 +178,11 @@ impl ScannerTask {
         Some(r)
     }
     fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
+        let num_blocks = if self.num_segments > 0 {
+            128
+        } else {
+            self.remainder
+        };
         if self.current_lba < self.source.get_bdev().num_blocks() {
             let ret = unsafe {
                 spdk_bdev_read_blocks(
@@ -168,7 +190,7 @@ impl ScannerTask {
                     self.source.ch,
                     std::ptr::null_mut(),
                     self.current_lba,
-                    1,
+                    num_blocks as u64,
                     Some(Self::source_complete),
                     &*self as *const _ as *mut _,
                 )
@@ -176,7 +198,8 @@ impl ScannerTask {
 
             // if we failed to dispatch the IO, we will redo it later return Ok(false)
             if ret == 0 {
-                self.current_lba += 1;
+                self.traverser = BlockTraverser::Reading;
+                self.current_lba += num_blocks as u64;
                 Ok(false)
             } else {
                 // for now fail on all errors; typically with ENOMEM we should retry
@@ -184,6 +207,7 @@ impl ScannerTask {
                 Err(Error::Internal("failed to dispatch IO".into()))
             }
         } else {
+            self.traverser = BlockTraverser::Completed;
             assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
             trace!("scan task completed! \\o/");
             Ok(true)
@@ -208,13 +232,18 @@ impl ScannerTaskTrait for ScannerTask {
         if success {
             task.source_io_hold(io);
 
+            let num_blocks = if task.num_segments > 0 {
+                128
+            } else {
+                task.remainder
+            };
             unsafe {
                 spdk_bdev_read_blocks(
                     task.target.desc,
                     task.target.ch,
                     std::ptr::null_mut(),
-                    task.current_lba - 1,
-                    1,
+                    task.current_lba - num_blocks as u64,
+                    num_blocks as u64,
                     Some(Self::target_complete),
                     Box::into_raw(task) as *const _ as *mut _,
                 );

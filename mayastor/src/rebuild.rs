@@ -6,9 +6,11 @@ use spdk_sys::{
     spdk_event_call, spdk_poller, spdk_poller_register, spdk_poller_unregister,
 };
 
+use spdk_sys::*;
+
 use crate::bdev::nexus::nexus_io::Bio;
 use crate::bdev::nexus::Error;
-use crate::descriptor::Descriptor;
+use crate::descriptor::{Descriptor, DmaBuf};
 use futures::channel::oneshot;
 
 /// struct that holds the state of a copy task. This struct
@@ -27,6 +29,9 @@ pub struct RebuildTask {
     sender: Option<oneshot::Sender<bool>>,
     /// progress reported to logs
     progress: Option<*mut spdk_poller>,
+    num_segments: u64,
+    remainder: u32,
+    buf: DmaBuf,
     // queue IO to dispatch during next poller run
     // queue: VecDeque<DmaBuf>,
 }
@@ -37,25 +42,27 @@ impl RebuildTask {
         _success: bool,
         arg: *mut c_void,
     ) {
+        info!("write complete");
         let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
+        //        let bio = Bio::from(io);
+        //
+        //        assert_eq!(bio.offset(), sio.offset());
+        //        assert_eq!(bio.num_blocks(), sio.num_blocks());
 
-        let sio = Bio::from(task.source_io.take().unwrap());
-        let bio = Bio::from(io);
-
-        assert_eq!(bio.offset(), sio.offset());
-        assert_eq!(bio.num_blocks(), sio.num_blocks());
-
-        Bio::io_free(io);
-        Bio::io_free(sio.io);
+        unsafe {
+            spdk_bdev_free_io(io);
+            //info!("{:p} : {:p}", sio, io);
+            // spdk_bdev_io_complete(sio, SPDK_BDEV_IO_STATUS_SUCCESS);
+        }
 
         match task.dispatch_next_segment() {
             Ok(next) => {
                 if next {
                     info!(
-                    "Rebuild completed at {:?} from {} to {} completed successfully!",
-                    std::time::SystemTime::now(),
-                    task.source.get_bdev().name(),
-                    task.target.get_bdev().name());
+                        "Rebuild completed at {:?} from {} to {} completed successfully!",
+                        std::time::SystemTime::now(),
+                        task.source.get_bdev().name(),
+                        task.target.get_bdev().name());
 
                     task.stop_progress();
                     task.send_completion();
@@ -64,7 +71,8 @@ impl RebuildTask {
                     std::mem::forget(task);
                 }
             }
-            Err(..) => {
+            Err(e) => {
+                dbg!(e);
                 // task will be dropped
                 panic!("error in rebuild");
             }
@@ -77,24 +85,29 @@ impl RebuildTask {
         success: bool,
         arg: *mut c_void,
     ) {
+        info!("read complete");
         let mut task = unsafe { Box::from_raw(arg as *mut RebuildTask) };
         if success {
             unsafe {
                 let bio = Bio::from(io);
                 let desc = task.target.desc;
                 let ch = task.target.ch;
-                task.source_io = Some(io);
 
-                spdk_bdev_writev_blocks(
+                dbg!(&bio);
+
+                let rc = spdk_bdev_write(
                     desc,
                     ch,
-                    bio.iovs(),
-                    bio.iov_count(),
+                    task.buf.buf,
                     bio.offset(),
-                    bio.num_blocks(),
+                    bio.num_blocks() * 512,
                     Some(Self::write_complete),
                     Box::into_raw(task) as *const _ as *mut _,
                 );
+
+                if rc != 0 {
+                    panic!("ret {}", rc);
+                }
             }
         } else {
             // the task will be dropped here the receiver would be cancelled too
@@ -103,6 +116,11 @@ impl RebuildTask {
                 spdk_bdev_free_io(io);
             }
         }
+
+        unsafe {
+            spdk_bdev_free_io(io);
+        }
+        trace!("exit here: {}", success);
     }
 
     /// return a new rebuild task
@@ -125,13 +143,22 @@ impl RebuildTask {
             return Err(Error::Invalid(error));
         }
 
+        let buf = source
+            .dma_malloc((128 * source.get_bdev().block_len()) as usize)
+            .unwrap();
+
+        let num_blocks = target.get_bdev().num_blocks();
+
         Ok(Box::new(Self {
             source,
             target,
             current_lba,
             source_io: None,
             sender: None,
+            remainder: (num_blocks % 128) as u32,
+            num_segments: num_blocks / 128,
             progress: None,
+            buf,
         }))
     }
 
@@ -144,14 +171,19 @@ impl RebuildTask {
     /// and not internally
     ///
     pub fn dispatch_next_segment(&mut self) -> Result<bool, Error> {
+        let num_blocks = if self.num_segments > 0 {
+            128
+        } else {
+            self.remainder
+        };
         if self.current_lba < self.source.get_bdev().num_blocks() {
             let ret = unsafe {
                 spdk_bdev_read_blocks(
                     self.source.desc,
                     self.source.ch,
-                    std::ptr::null_mut(),
+                    self.buf.buf,
                     self.current_lba,
-                    1,
+                    num_blocks as u64,
                     Some(Self::read_complete),
                     &*self as *const _ as *mut _,
                 )
@@ -159,16 +191,17 @@ impl RebuildTask {
 
             // if we failed to dispatch the IO, we will redo it later return Ok(false)
             if ret == 0 {
-                self.current_lba += 1;
+                self.current_lba += num_blocks as u64;
                 Ok(false)
             } else {
+                dbg!(ret);
                 // for now fail on all errors; typically with ENOMEM we should retry
                 // however, we want to delay this so likely use a (one time) poller?
                 Err(Error::Internal("failed to dispatch IO".into()))
             }
         } else {
             assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
-            trace!("rebuild task completed! \\o/");
+            trace!("scan task completed! \\o/");
             Ok(true)
         }
     }

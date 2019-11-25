@@ -55,7 +55,7 @@ use futures::channel::oneshot;
 #[derive(Debug)]
 pub struct DmaBuf {
     /// a raw pointer to the buffer
-    buf: *mut c_void,
+    pub buf: *mut c_void,
     /// the length of the allocated buffer
     len: usize,
 }

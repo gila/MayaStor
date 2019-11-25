@@ -17,15 +17,15 @@ fn copy_task() {
     let args = vec!["rebuild_task"];
 
     // setup our test files
-    common::create_disk(DISKNAME1, "64m");
-    common::create_disk(DISKNAME2, "64m");
+    common::create_disk(DISKNAME1, "1GB");
+    common::create_disk(DISKNAME2, "1GB");
 
     let rc: i32 = mayastor_start("test", args, || {
         mayastor::executor::spawn(works());
     });
 
     assert_eq!(rc, 0);
-    common::delete_disk(&[DISKNAME1.into(), DISKNAME2.into()])
+    //  common::delete_disk(&[DISKNAME1.into(), DISKNAME2.into()])
 }
 
 async fn create_bdevs() {
