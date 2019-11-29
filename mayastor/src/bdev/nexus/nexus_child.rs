@@ -23,6 +23,7 @@ use crate::{
     descriptor::{Descriptor, DmaBuf},
     nexus_uri::{nexus_parse_uri, BdevType},
 };
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub(crate) enum ChildState {
@@ -70,7 +71,7 @@ pub struct NexusChild {
     /// current state of the child
     pub(crate) state: ChildState,
     #[serde(skip_serializing)]
-    pub(crate) descriptor: Option<Descriptor>,
+    pub(crate) descriptor: Option<Rc<Descriptor>>,
 }
 
 impl Display for NexusChild {
@@ -92,7 +93,9 @@ impl Display for NexusChild {
 }
 
 impl NexusChild {
-    /// open the child bdev, assumes RW
+    /// open the child bdev in RW mode. The bdev can only be opened once in RW
+    /// mode even by the same module. For multiple writers, use we use the
+    /// Descriptor.
     pub(crate) fn open(
         &mut self,
         parent_size: u64,
@@ -138,7 +141,7 @@ impl NexusChild {
             rc = unsafe {
                 spdk_sys::spdk_bdev_module_claim_bdev(
                     bdev.inner,
-                    std::ptr::null_mut(),
+                    self.desc,
                     &NEXUS_MODULE.module as *const _ as *mut _,
                 )
             };
@@ -157,10 +160,10 @@ impl NexusChild {
             self.state = ChildState::Open;
 
             // used for internal IOS like updating labels
-            self.descriptor = Some(Descriptor {
+            self.descriptor = Some(Rc::new(Descriptor {
                 desc: self.desc,
                 ch: self.get_io_channel(),
-            });
+            }));
 
             debug!("{}: child {} opened successfully", self.parent, self.name);
 
@@ -199,6 +202,15 @@ impl NexusChild {
     pub(crate) fn get_io_channel(&self) -> *mut spdk_sys::spdk_io_channel {
         assert_eq!(self.state, ChildState::Open);
         unsafe { spdk_bdev_get_io_channel(self.desc) }
+    }
+
+    pub fn borrow_descriptor(&self) -> Rc<Descriptor> {
+        dbg!(&self.descriptor);
+        if let Some(d) = self.descriptor.as_ref() {
+            d.clone()
+        } else {
+            panic!();
+        }
     }
 
     /// create a new nexus child

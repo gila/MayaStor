@@ -94,8 +94,9 @@ use crate::{
         },
         Bdev,
     },
-    descriptor::DmaBuf,
+    descriptor::{Descriptor, DmaBuf},
 };
+use std::rc::Rc;
 
 pub(crate) static NEXUS_PRODUCT_ID: &str = "Nexus CAS Driver v0.0.1";
 
@@ -617,6 +618,19 @@ impl Nexus {
                 pio
             );
         }
+    }
+
+    pub fn get_descriptors(&self) -> Vec<Rc<Descriptor>> {
+        let r = self
+            .children
+            .iter()
+            .map(|c| {
+                dbg!(c);
+                c.borrow_descriptor()
+            })
+            .collect::<Vec<_>>();
+        dbg!(&r);
+        r
     }
 }
 

@@ -34,11 +34,15 @@
 //! assert_eq!(slice[0], 0xff);
 //! ```
 
-use crate::{
-    bdev::{bdev_lookup_by_name, nexus::Error, Bdev},
-    executor::cb_arg,
+use std::{
+    ffi::c_void,
+    ops::{Deref, DerefMut},
+    slice::{from_raw_parts, from_raw_parts_mut},
 };
+
 use futures::channel::oneshot;
+use futures::channel::oneshot;
+
 use spdk_sys::{
     spdk_bdev_close,
     spdk_bdev_desc,
@@ -55,10 +59,30 @@ use spdk_sys::{
     spdk_io_channel,
     spdk_put_io_channel,
 };
-use std::{
-    ffi::c_void,
-    ops::{Deref, DerefMut},
-    slice::{from_raw_parts, from_raw_parts_mut},
+use spdk_sys::{
+    spdk_bdev_close,
+    spdk_bdev_desc,
+    spdk_bdev_desc_get_bdev,
+    spdk_bdev_free_io,
+    spdk_bdev_get_io_channel,
+    spdk_bdev_io,
+    spdk_bdev_open,
+    spdk_bdev_read,
+    spdk_bdev_write,
+    spdk_dma_free,
+    spdk_dma_zmalloc,
+    spdk_get_io_channel,
+    spdk_io_channel,
+    spdk_put_io_channel,
+};
+
+use crate::{
+    bdev::{Bdev, bdev_lookup_by_name, nexus::Error},
+    executor::cb_arg,
+};
+use crate::{
+    bdev::{Bdev, bdev_lookup_by_name, nexus::Error},
+    executor::cb_arg,
 };
 
 /// DmaBuf that is allocated from the memory pool
