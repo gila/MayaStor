@@ -205,7 +205,6 @@ impl NexusChild {
     }
 
     pub fn borrow_descriptor(&self) -> Rc<Descriptor> {
-        dbg!(&self.descriptor);
         if let Some(d) = self.descriptor.as_ref() {
             d.clone()
         } else {
@@ -337,7 +336,7 @@ impl NexusChild {
         Ok(nl)
     }
 
-    /// write the contents of the buffer to  this child
+    /// write the contents of the buffer to this child
     pub async fn write_at(
         &self,
         offset: u64,

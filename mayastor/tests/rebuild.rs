@@ -18,10 +18,10 @@ mod common;
 #[test]
 fn copy_task() {
     common::mayastor_test_init();
-    let args = vec!["rebuild_task", "-m", "0x2"];
+    let args = vec!["rebuild_task", "-L", "bdev", "-m", "0x2"];
 
-    //    common::dd_random_file(DISKNAME1, "4096", "16384");
-    //    common::truncate_file(DISKNAME2, "64M");
+    common::dd_random_file(DISKNAME1, 4096, 4096 * 1024);
+    common::truncate_file(DISKNAME2, 4096 * 1024);
 
     let rc: i32 = mayastor_start("test", args, || {
         mayastor::executor::spawn(works());
@@ -30,7 +30,7 @@ fn copy_task() {
     assert_eq!(rc, 0);
 
     common::compare_files(DISKNAME1, DISKNAME2);
-    //    common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
+    common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
 }
 
 async fn rebuild_direct() {
@@ -61,7 +61,8 @@ async fn rebuild_direct() {
         RebuildTask::new(Rc::new(sourcebd), Rc::new(targetbd)).unwrap();
 
     if let Ok(mut e) = RebuildTask::start_rebuild(copy_task) {
-        e.completed().await;
+        let done = e.completed().await.unwrap();
+        assert_eq!(done, true);
     }
 
     let _ = source.destroy().await;
@@ -75,16 +76,10 @@ async fn create_nexus() {
         .unwrap();
 }
 
-async fn works() {
-    rebuild_direct().await;
-    create_nexus().await;
-
+async fn rebuild_nexus_offline() {
     let nexus = nexus_lookup("rebuild_nexus").unwrap();
-    dbg!(&nexus);
-
     let mut v = nexus.get_descriptors();
 
-    nexus.close();
     let copy_task =
         RebuildTask::new(v.pop().unwrap(), v.pop().unwrap()).unwrap();
 
@@ -92,6 +87,22 @@ async fn works() {
         let done = r.completed().await;
         assert_eq!(done.unwrap(), true);
     }
+}
 
+async fn rebuild_nexus_online() {
+    let nexus = nexus_lookup("rebuild_nexus").unwrap();
+    nexus.fault_child(BDEVNAME1).await.unwrap();
+    nexus.init_rebuild().unwrap();
+    nexus.start_rebuild().unwrap();
+    nexus.rebuild_completion().await.unwrap();
+
+    mayastor_stop(0);
+}
+
+async fn works() {
+    rebuild_direct().await;
+    create_nexus().await;
+    rebuild_nexus_offline().await;
+    rebuild_nexus_online().await;
     //nexus.offline_child(BDEVNAME1).await;
 }

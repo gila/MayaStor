@@ -95,6 +95,7 @@ use crate::{
         Bdev,
     },
     descriptor::{Descriptor, DmaBuf},
+    rebuild::RebuildTask,
 };
 use std::rc::Rc;
 
@@ -126,20 +127,27 @@ pub struct Nexus {
     /// the handle to be used when sharing the nexus, this allows for the bdev
     /// to be shared with vbdevs on top
     pub(crate) share_handle: Option<String>,
+    /// A handle to a rebuild task which may or may not be running
+    pub(crate) rebuild_handle: Option<Box<RebuildTask>>,
 }
 
 unsafe impl core::marker::Sync for Nexus {}
 
-#[derive(Debug, Serialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, PartialOrd)]
 pub enum NexusState {
     /// nexus created but no children attached
     Init,
+    /// closed
+    Closed,
     /// Online
     Online,
     /// The nexus cannot perform any IO operation
     Faulted,
     /// Degraded, one or more child is missing but IO can still flow
     Degraded,
+    /// mule is moving blocks from A to B which is typical for an animal like
+    /// this
+    Remuling,
 }
 
 impl ToString for NexusState {
@@ -149,6 +157,8 @@ impl ToString for NexusState {
             NexusState::Online => "online",
             NexusState::Faulted => "faulted",
             NexusState::Degraded => "degraded",
+            NexusState::Closed => "closed",
+            NexusState::Remuling => "remuling",
         }
         .parse()
         .unwrap()
@@ -195,6 +205,7 @@ impl Nexus {
             nbd_disk: None,
             share_handle: None,
             size,
+            rebuild_handle: None,
         });
 
         n.bdev.set_uuid(match uuid {
@@ -281,7 +292,7 @@ impl Nexus {
     pub async fn sync_labels(&mut self) -> Result<(), Error> {
         if let Ok(label) = self.update_child_labels().await {
             // now register the bdev but update its size first to
-            // ensure we  adhere to the partitions
+            // ensure we adhere to the partitions
 
             // When the GUID does not match the given UUID it means
             // that the PVC has been recreated, is such as
@@ -321,13 +332,22 @@ impl Nexus {
     }
 
     /// close the nexus and any children that are open
-    pub fn close(&mut self) -> Result<(), ()> {
-        info!("{}: Closing", self.name);
+    pub fn close(&mut self) -> Result<NexusState, ()> {
+        // a closed operation might already be in progress calling unregister
+        // will trip an assertion within the external libraries
+        if self.state == NexusState::Closed {
+            trace!("{}: already closed", self.name);
+            return Ok(self.state);
+        }
+
+        trace!("{}: closing, from state: {:?} ", self.name, self.state);
         self.children
             .iter_mut()
             .map(|c| {
                 if c.state == ChildState::Open {
-                    let _ = c.close();
+                    if let Err(e) = c.close() {
+                        info!("failed to close child {}: {:?}", c.name, e);
+                    }
                 }
             })
             .for_each(drop);
@@ -336,7 +356,8 @@ impl Nexus {
             spdk_io_device_unregister(self.as_ptr(), None);
         }
 
-        Ok(())
+        trace!("{}: closed", self.name);
+        Ok(self.set_state(NexusState::Closed))
     }
 
     /// Destroy the nexus.
@@ -621,16 +642,11 @@ impl Nexus {
     }
 
     pub fn get_descriptors(&self) -> Vec<Rc<Descriptor>> {
-        let r = self
-            .children
+        self.children
             .iter()
-            .map(|c| {
-                dbg!(c);
-                c.borrow_descriptor()
-            })
-            .collect::<Vec<_>>();
-        dbg!(&r);
-        r
+            .filter(|c| c.state == ChildState::Open)
+            .map(|c| c.borrow_descriptor())
+            .collect::<Vec<_>>()
     }
 }
 

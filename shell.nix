@@ -20,6 +20,7 @@ mkShell {
     figlet
     gdb
     gptfdisk
+    libspdk
     libiscsi.bin
     nodePackages.jshint
     nodePackages.prettier

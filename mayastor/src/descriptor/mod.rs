@@ -2,20 +2,11 @@
 //! by a bdev descriptor.
 //!
 //! A descriptor is obtained by opening a bdev. Once opened, a reference to a
-//! channel is created and the two allow for submitting IO to the bdevs.
+//! channel is created, and the two allow for submitting IO to the bdevs.
 //!
 //! The buffers written to the bdev must be allocated by the provided allocation
 //! methods. These buffers are allocated from mem pools and huge pages and allow
 //! for DMA transfers in the case of, for example, NVMe devices.
-//!
-//! The callbacks are implemented by the regular oneshot channels. As the unsync
-//! features of futures 0.2 are not part of futures 0.3 yet (if ever?) it is
-//! not optimized for performance yet. Its not our goal to directly have a user
-//! space API to be consumable for this purpose either but they might be useful
-//! for other scenarios in the future.
-//!
-//! Also, it would be nice to support, future, the AsyncRead/Write traits such
-//! that any rust program, directly, can consume user space IO.
 //!
 //! # Example:
 //! ```ignore
@@ -41,24 +32,7 @@ use std::{
 };
 
 use futures::channel::oneshot;
-use futures::channel::oneshot;
 
-use spdk_sys::{
-    spdk_bdev_close,
-    spdk_bdev_desc,
-    spdk_bdev_desc_get_bdev,
-    spdk_bdev_free_io,
-    spdk_bdev_get_io_channel,
-    spdk_bdev_io,
-    spdk_bdev_open,
-    spdk_bdev_read,
-    spdk_bdev_write,
-    spdk_dma_free,
-    spdk_dma_zmalloc,
-    spdk_get_io_channel,
-    spdk_io_channel,
-    spdk_put_io_channel,
-};
 use spdk_sys::{
     spdk_bdev_close,
     spdk_bdev_desc,
@@ -77,11 +51,7 @@ use spdk_sys::{
 };
 
 use crate::{
-    bdev::{Bdev, bdev_lookup_by_name, nexus::Error},
-    executor::cb_arg,
-};
-use crate::{
-    bdev::{Bdev, bdev_lookup_by_name, nexus::Error},
+    bdev::{bdev_lookup_by_name, nexus::Error, Bdev},
     executor::cb_arg,
 };
 
@@ -284,7 +254,7 @@ impl Descriptor {
     }
 
     /// read from the given `offset` into the `buffer` note that the buffer
-    /// is allocated internally and should be copied. Also its unknown to me
+    /// is allocated internally and should be copied. Also, its unknown to me
     /// what will happen if you for example, where to turn this into a vec
     /// but for sure -- not what you want.
     pub async fn read_at(
