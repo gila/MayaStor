@@ -120,10 +120,28 @@ impl RebuildTask {
         Ok(task)
     }
 
-    pub fn suspend(&mut self) -> Result<(), ()> {
+    pub fn suspend(&mut self) -> Result<RebuildState, Error> {
         info!("{}: suspending rebuild task", self.nexus.as_ref().unwrap());
-        self.state = RebuildState::Suspended;
-        Ok(())
+
+        if self.state == RebuildState::Completed {
+            Err(Error::Invalid(
+                "can not suspended already completed task".into(),
+            ))
+        } else {
+            self.state = RebuildState::Suspended;
+            Ok(self.state)
+        }
+    }
+
+    pub fn resume(&mut self) -> Result<RebuildState, Error> {
+        info!("{}: resume rebuild task", self.nexus.as_ref().unwrap());
+
+        if self.state == RebuildState::Suspended {
+            self.state = RebuildState::Running;
+            self.dispatch_next_segment()
+        } else {
+            Err(Error::Invalid("task not suspended".into()))
+        }
     }
 
     pub async fn completed(&mut self) -> Result<bool, oneshot::Canceled> {
@@ -173,6 +191,11 @@ impl RebuildTask {
             return;
         }
 
+        if task.state == RebuildState::Suspended {
+            info!("{}: rebuild suspended", task.nexus.as_ref().unwrap());
+            return;
+        }
+
         match task.dispatch_next_segment() {
             Ok(next) => match next {
                 RebuildState::Completed => task.rebuild_completed(),
@@ -180,7 +203,10 @@ impl RebuildTask {
                 RebuildState::Running => {}
                 RebuildState::Failed => {}
                 RebuildState::Cancelled => {}
-                RebuildState::Suspended => {}
+                RebuildState::Suspended => {
+                    info!("suspended rebuild!");
+                    dbg!(task);
+                }
             },
             Err(e) => {
                 dbg!(e);
@@ -244,6 +270,10 @@ impl RebuildTask {
             self.num_segments += 1;
             self.partial_segment
         }
+    }
+
+    pub fn current(&self) -> u64 {
+        self.current_lba
     }
     /// Copy blocks from source to target with increments of segment size.
     /// When the task has been completed, this function returns
@@ -375,7 +405,7 @@ impl RebuildTask {
             }
             Ok(..) => {
                 task.state = RebuildState::Running;
-                task.register_poller();
+                //task.register_poller();
             }
         }
     }

@@ -95,6 +95,7 @@ use crate::{
         Bdev,
     },
     descriptor::{Descriptor, DmaBuf},
+    nexus_uri::{nexus_parse_uri, BdevType},
     rebuild::RebuildTask,
 };
 use std::rc::Rc;
@@ -672,7 +673,7 @@ pub async fn nexus_create(
         .expect("Failed to allocate Nexus instance");
 
     for child in children {
-        if let Err(result) = ni.create_and_add_child(child).await {
+        if let Err(result) = ni.register_child(child).await {
             error!("{}: Failed to create child bdev {}", ni.name, child);
             ni.destroy_children().await;
             return Err(result);
@@ -716,4 +717,15 @@ impl Display for Nexus {
             .for_each(drop);
         Ok(())
     }
+}
+
+pub async fn bdev_destroy(uri: &str) -> Result<(), Error> {
+    match nexus_parse_uri(uri)? {
+        BdevType::Aio(args) => args.destroy().await?,
+        BdevType::Iscsi(args) => args.destroy().await?,
+        BdevType::Nvmf(args) => args.destroy()?,
+        _ => {}
+    };
+
+    Ok(())
 }

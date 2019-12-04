@@ -22,7 +22,10 @@ use spdk_sys::{
     spdk_uuid_generate,
 };
 
-use crate::executor::cb_arg;
+use crate::{
+    executor::cb_arg,
+    nexus_uri::{nexus_parse_uri, BdevType},
+};
 
 /// Allocate C string and return pointer to it.
 /// NOTE: you must explicitly free it, otherwise the memory is leaked!

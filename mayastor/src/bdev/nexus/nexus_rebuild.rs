@@ -95,4 +95,38 @@ impl Nexus {
             Err(Error::Invalid("No rebuild task registered".into()))
         }
     }
+
+    pub fn rebuild_suspend(&mut self) -> Result<(), Error> {
+        if let Some(mut task) = self.rebuild_handle.take() {
+            let state = task.suspend().unwrap();
+            self.rebuild_handle = Some(task);
+            Ok(())
+        } else {
+            Err(Error::Invalid("no rebuild task configured".into()))
+        }
+    }
+
+    pub fn rebuild_resume(&mut self) -> Result<(), Error> {
+        if let Some(mut task) = self.rebuild_handle.take() {
+            let state = task.resume().unwrap();
+            self.rebuild_handle = Some(task);
+            Ok(())
+        } else {
+            Err(Error::Invalid("no rebuild task configured".into()))
+        }
+    }
+
+    pub fn rebuild_get_current(&mut self) -> Result<u64, Error> {
+        if let Some(task) = self.rebuild_handle.as_ref() {
+            Ok(task.current())
+        } else {
+            Err(Error::Invalid("no rebuild task configured".into()))
+        }
+    }
+
+    pub fn log_progress(&mut self) {
+        if let Some(hdl) = self.rebuild_handle.as_ref() {
+            info!(":{} {:?} {}", self.name, self.state, hdl.current());
+        }
+    }
 }
