@@ -13,7 +13,10 @@ static BDEVNAME1: &str = "aio:///code/disk1.img?blk_size=512";
 
 static DISKNAME2: &str = "/code/disk2.img";
 static BDEVNAME2: &str = "aio:///code/disk2.img?blk_size=512";
-use mayastor::event::on_core;
+use mayastor::{
+    event::{on_core, run_on_core},
+    rebuild::RebuildState,
+};
 use spdk_sys::*;
 use std::time::Duration;
 
@@ -63,10 +66,29 @@ async fn rebuild_direct() {
     let copy_task =
         RebuildTask::new(Rc::new(sourcebd), Rc::new(targetbd)).unwrap();
 
-    if let Ok(mut e) = RebuildTask::start_rebuild(copy_task) {
-        let done = e.completed().await.unwrap();
+    let ctx = run_on_core(0, copy_task, |task| {
+        task.start_time = Some(std::time::SystemTime::now());
+        match task.next() {
+            Err(next) => {
+                dbg!("{:?}", next);
+                task.shutdown(false);
+            }
+            Ok(..) => {
+                task.state = RebuildState::Running;
+                task.start_progress_poller();
+            }
+        }
+    });
+
+    if let Ok(mut ctx) = ctx {
+        let done = ctx.completed().await.unwrap();
         assert_eq!(done, true);
     }
+
+    //    if let Ok(mut e) = RebuildTask::start_rebuild(copy_task) {
+    //        let done = e.completed().await.unwrap();
+    //        assert_eq!(done, true);
+    //    }
 
     let _ = source.destroy().await;
     let _ = target.destroy().await;
@@ -94,14 +116,15 @@ async fn rebuild_nexus_online() {
 }
 
 async fn works() {
-    create_nexus().await;
-    on_core(1, || {
-        let nexus = nexus_lookup("rebuild_nexus").unwrap();
-        loop {
-            std::thread::sleep(Duration::from_millis(1000));
-            nexus.log_progress();
-        }
-    });
-
-    rebuild_nexus_online().await;
+    //create_nexus().await;
+    rebuild_direct().await;
+    //    on_core(1, || {
+    //        let nexus = nexus_lookup("rebuild_nexus").unwrap();
+    //        loop {
+    //            std::thread::sleep(Duration::from_millis(1000));
+    //            nexus.log_progress();
+    //        }
+    //    });
+    //
+    //rebuild_nexus_online().await;
 }

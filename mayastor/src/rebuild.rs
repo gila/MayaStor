@@ -33,11 +33,28 @@ pub enum RebuildState {
     Suspended,
 }
 
+//fn get_rebuild_ctx<'a>(arg: *mut c_void) -> &'a mut RebuildTask {
+//    unsafe { &mut *(arg as *const _ as *mut RebuildTask) }
+//    //  unsafe { Box::from_raw(arg as *mut RebuildTask) }
+//}
+pub trait MayaCtx {
+    type Item;
+    fn into_ctx<'a>(arg: *mut c_void) -> &'a mut Self::Item;
+}
+
+impl MayaCtx for RebuildTask {
+    type Item = RebuildTask;
+
+    fn into_ctx<'a>(arg: *mut c_void) -> &'a mut Self::Item {
+        unsafe { &mut *(arg as *const _ as *mut RebuildTask) }
+    }
+}
+
 /// struct that holds the state of a copy task. This struct
 /// is used during rebuild.
 #[derive(Debug)]
 pub struct RebuildTask {
-    state: RebuildState,
+    pub state: RebuildState,
     /// the source where to copy from
     pub source: Rc<Descriptor>,
     /// the target where to copy to
@@ -62,7 +79,7 @@ pub struct RebuildTask {
     /// How many blocks per segments we have
     blocks_per_segment: u32,
     /// start time of the rebuild task
-    start_time: Option<SystemTime>,
+    pub start_time: Option<SystemTime>,
     pub(crate) nexus: Option<String>,
 }
 
@@ -138,7 +155,7 @@ impl RebuildTask {
 
         if self.state == RebuildState::Suspended {
             self.state = RebuildState::Running;
-            self.dispatch_next_segment()
+            self.next()
         } else {
             Err(Error::Invalid("task not suspended".into()))
         }
@@ -196,7 +213,7 @@ impl RebuildTask {
             return;
         }
 
-        match task.dispatch_next_segment() {
+        match task.next() {
             Ok(next) => match next {
                 RebuildState::Completed => task.rebuild_completed(),
                 RebuildState::Initialized => {}
@@ -249,7 +266,7 @@ impl RebuildTask {
 
     /// function used shutdown the rebuild task whenever it is successful or
     /// not.
-    fn shutdown(&mut self, success: bool) {
+    pub fn shutdown(&mut self, success: bool) {
         if success {
             self.state = RebuildState::Completed;
         } else {
@@ -284,9 +301,7 @@ impl RebuildTask {
     /// be made to restart a build automatically, ideally we want this to be
     /// done from the control plane and not internally, but we will implement
     /// some form of implicit retries.
-    pub(crate) fn dispatch_next_segment(
-        &mut self,
-    ) -> Result<RebuildState, Error> {
+    pub fn next(&mut self) -> Result<RebuildState, Error> {
         let num_blocks = self.num_blocks();
 
         // if we are a multiple of the max segment size this will be 0 and thus
@@ -388,7 +403,7 @@ impl RebuildTask {
         0
     }
 
-    fn register_poller(&mut self) {
+    pub fn start_progress_poller(&mut self) {
         self.progress =
             Some(register_poller(Self::progress, &*self, 1_000_000).unwrap());
     }
@@ -398,7 +413,7 @@ impl RebuildTask {
     extern "C" fn rebuild_init(ctx: *mut c_void, _arg2: *mut c_void) {
         let mut task = RebuildTask::get_rebuild_ctx(ctx);
         task.start_time = Some(std::time::SystemTime::now());
-        match task.dispatch_next_segment() {
+        match task.next() {
             Err(next) => {
                 error!("{:?}", next);
                 task.shutdown(false);

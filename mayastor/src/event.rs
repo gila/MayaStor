@@ -1,4 +1,4 @@
-use crate::bdev::nexus::Error;
+use crate::{bdev::nexus::Error, rebuild::MayaCtx};
 use spdk_sys::{spdk_event_allocate, spdk_event_call};
 use std::os::raw::c_void;
 
@@ -23,6 +23,36 @@ pub(crate) fn dispatch<T>(
     }
 
     Ok(argx)
+}
+
+pub fn run_on_core<T: MayaCtx, F: FnOnce(&mut T::Item)>(
+    core: u32,
+    arg: Box<T>,
+    f: F,
+) -> Result<Box<T>, Error> {
+    extern "C" fn unwrap<F, T>(f: *mut c_void, t: *mut c_void)
+    where
+        F: FnOnce(&mut T::Item),
+        T: MayaCtx,
+    {
+        unsafe {
+            let f: Box<F> = Box::from_raw(f as *mut F);
+            let arg = T::into_ctx(t);
+            f(arg)
+        }
+    }
+
+    let ptr = Box::into_raw(Box::new(f)) as *mut c_void;
+    let arg_ptr = &*arg as *const _ as *mut c_void;
+    let event = unsafe {
+        spdk_event_allocate(core, Some(unwrap::<F, T>), ptr, arg_ptr)
+    };
+
+    if event.is_null() {
+        panic!("failed to allocate event");
+    }
+    unsafe { spdk_event_call(event) };
+    Ok(arg)
 }
 
 pub fn on_core<F: FnOnce()>(core: u32, f: F) {
