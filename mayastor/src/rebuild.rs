@@ -50,6 +50,29 @@ impl MayaCtx for RebuildTask {
     }
 }
 
+//impl Iterator for RebuildTask {
+//    type Item = Result<RebuildState, Error>;
+//
+//    fn next(&mut self) -> Self::Item {
+//        let num_blocks = self.num_blocks();
+//
+//        // if we are a multiple of the max segment size this will be 0 and
+// thus        // we have completed the job
+//        if num_blocks == 0 {
+//            self.shutdown(true);
+//            return Ok(RebuildState::Completed);
+//        }
+//
+//        if self.current_lba < self.source.get_bdev().num_blocks() {
+//            self.source_read_blocks(num_blocks)
+//        } else {
+//            assert_eq!(self.current_lba, self.source.get_bdev().num_blocks());
+//            trace!("Rebuild task completed! \\o/");
+//            Ok(RebuildState::Completed)
+//        }
+//    }
+//}
+
 /// struct that holds the state of a copy task. This struct
 /// is used during rebuild.
 #[derive(Debug)]

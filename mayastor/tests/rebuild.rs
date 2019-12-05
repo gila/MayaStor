@@ -14,7 +14,7 @@ static BDEVNAME1: &str = "aio:///code/disk1.img?blk_size=512";
 static DISKNAME2: &str = "/code/disk2.img";
 static BDEVNAME2: &str = "aio:///code/disk2.img?blk_size=512";
 use mayastor::{
-    event::{on_core, run_on_core},
+    event::{on_core, spawm_on_core},
     rebuild::RebuildState,
 };
 use spdk_sys::*;
@@ -66,7 +66,7 @@ async fn rebuild_direct() {
     let copy_task =
         RebuildTask::new(Rc::new(sourcebd), Rc::new(targetbd)).unwrap();
 
-    let ctx = run_on_core(0, copy_task, |task| {
+    let ctx = spawm_on_core(0, copy_task, |task| {
         task.start_time = Some(std::time::SystemTime::now());
         match task.next() {
             Err(next) => {
