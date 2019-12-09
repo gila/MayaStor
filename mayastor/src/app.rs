@@ -1,21 +1,19 @@
 use spdk_sys::{
     spdk_app_shutdown_cb,
+    spdk_cpuset_alloc,
+    spdk_cpuset_set_cpu,
+    spdk_cpuset_zero,
     spdk_env_dpdk_post_init,
+    spdk_env_get_current_core,
     spdk_log_level,
     spdk_log_set_backtrace_level,
     spdk_log_set_level,
     spdk_log_set_print_level,
     spdk_pci_addr,
     spdk_sighandler_t,
-    SPDK_LOG_INFO,
-    spdk_cpuset_zero,
-    spdk_cpuset_alloc,
-    spdk_cpuset_set_cpu,
-    spdk_env_get_current_core,
     spdk_thread_create,
     spdk_thread_send_msg,
-
-
+    SPDK_LOG_INFO,
 };
 
 use super::spdklog::SpdkLog;
@@ -25,13 +23,19 @@ extern "C" {
     pub fn rte_log_set_level(_type: i32, level: i32) -> i32;
     pub fn spdk_reactors_init() -> i32;
     pub fn spdk_reactors_start();
+    pub fn spdk_reactors_stop() -> libc::c_void;
     pub fn bootstrap_fn(arg: *mut libc::c_void);
-    static g_reactor_state: u32;
+}
+
+#[link(name = "spdk_fat")]
+extern "C" {
+    static mut g_reactor_state: u32;
 }
 
 use std::ffi::CString;
 const RTE_LOGTYPE_EAL: i32 = 0;
-const  RTE_LOG_NOTICE: i32 = 1;
+const RTE_LOG_NOTICE: i32 = 1;
+const RTE_LOG_DEBUG: i32 = 8;
 const SPDK_APP_DPDK_DEFAULT_MEM_SIZE: i32 = -1;
 const SPDK_APP_DPDK_DEFAULT_MASTER_CORE: i32 = -1;
 const SPDK_APP_DPDK_DEFAULT_MEM_CHANNEL: i32 = -1;
@@ -89,7 +93,7 @@ impl MsAppOpts {
         opts.rpc_addr = "/var/tmp/mayastor.sock".into();
         opts.shm_id = -1;
 
-//        opts.config_file = "/code/spdk-nvme.conf".into();
+        //        opts.config_file = "/code/spdk-nvme.conf".into();
 
         opts
     }
@@ -99,7 +103,10 @@ impl MsAppOpts {
         let mut args: Vec<CString> = Vec::new();
 
         args.push(CString::new(self.name.clone()).unwrap());
-        args.push(CString::new(format!("-c {}", self.reactor_mask)).unwrap());
+
+        let mask = CString::new(format!("-c {}", self.reactor_mask)).unwrap();
+
+        dbg!(&mask);
 
         if self.mem_channel > 0 {
             args.push(
@@ -247,16 +254,17 @@ pub fn eal_init(opts: &MsAppOpts) -> i32 {
 
     let env_opts = opts.to_env_opts();
 
+    let rc = unsafe { rte_log_set_level(RTE_LOGTYPE_EAL, RTE_LOG_DEBUG) };
     let rc = unsafe {
         rte_eal_init(
-            (env_opts.len() as libc::c_int) - 1,
+            (env_opts.len() as libc::c_int) -1,
             env_opts.as_ptr() as *mut *mut i8,
         )
     };
 
     if rc != 0 {
         println!("oh shit nothing works!");
-        return -1
+        return -1;
     }
 
     let rc = unsafe { rte_log_set_level(RTE_LOGTYPE_EAL, RTE_LOG_NOTICE) };
@@ -295,44 +303,36 @@ pub fn mayastor_start() -> i32 {
     let rc = eal_init(&app_opts);
 
     let rc = unsafe { spdk_reactors_init() };
-    if rc != 0  {
+    if rc != 0 {
         error!("kaput..");
-
     }
 
-    let mut cpu_mask = unsafe {
-        spdk_cpuset_alloc()
-    };
+    let mut cpu_mask = unsafe { spdk_cpuset_alloc() };
 
     unsafe {
-
-    spdk_cpuset_zero(cpu_mask);
-    spdk_cpuset_set_cpu(cpu_mask, spdk_env_get_current_core(), true);
+        spdk_cpuset_zero(cpu_mask);
+        spdk_cpuset_set_cpu(cpu_mask, spdk_env_get_current_core(), true);
     }
 
     info!("mayastor started");
 
     let thread = unsafe {
-            let name = CString::new("maya_master").unwrap();
+        let name = CString::new("maya_master").unwrap();
 
-            spdk_thread_create(name.as_ptr(), cpu_mask)
+        spdk_thread_create(name.as_ptr(), cpu_mask)
     };
 
     if thread.is_null() {
         panic!("no main thread");
     }
 
-
     extern "C" fn bootstrapper(arg: *mut libc::c_void) {
-            info!("bootstrapping");
-
+        info!("bootstrapping");
     }
 
-
     unsafe {
-
-    spdk_thread_send_msg(thread, Some(bootstrapper), std::ptr::null_mut());
-    spdk_reactors_start();
+        spdk_thread_send_msg(thread, Some(bootstrapper), std::ptr::null_mut());
+        spdk_reactors_start();
     }
 
     0
@@ -340,6 +340,9 @@ pub fn mayastor_start() -> i32 {
 
 pub extern "C" fn shutdown_signal(signo: i32) -> *mut libc::c_void {
     println!("signal recieved: {} ... good!", signo);
+
+    unsafe { spdk_reactors_stop() };
+
     std::ptr::null_mut()
 }
 
@@ -350,6 +353,5 @@ mod test {
     #[test]
     fn test_ms_appt_opts() {
         mayastor_start();
-        std::thread::sleep_ms(5000);
     }
 }
