@@ -1,13 +1,40 @@
 #[macro_use]
 extern crate ioctl_gen;
 #[macro_use]
-extern crate log;
-#[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 #[macro_use]
 extern crate serde;
 extern crate serde_json;
 extern crate spdk_sys;
+use log::{logger, Level, Record};
+
+use std::{
+    boxed::Box,
+    env,
+    ffi::CString,
+    io::Write,
+    iter::Iterator,
+    net::Ipv4Addr,
+    os::raw::{c_char, c_int, c_void},
+    ptr::null_mut,
+    time::Duration,
+    vec::Vec,
+};
+
+use env_logger::{Builder, Env};
+use spdk_sys::{
+    maya_log,
+    spdk_app_fini,
+    spdk_app_opts,
+    spdk_app_opts_init,
+    spdk_app_parse_args,
+    spdk_app_start,
+    spdk_app_stop,
+    spdk_log_get_print_level,
+};
+use std::{ffi::CStr, path::Path};
 
 pub mod aio_dev;
 pub mod bdev;
@@ -25,26 +52,6 @@ pub mod pool;
 pub mod rebuild;
 pub mod replica;
 pub mod spdklog;
-use libc::{c_char, c_int};
-use spdk_sys::{
-    spdk_app_fini,
-    spdk_app_opts,
-    spdk_app_opts_init,
-    spdk_app_parse_args,
-    spdk_app_start,
-    spdk_app_stop,
-};
-use std::{
-    boxed::Box,
-    env,
-    ffi::{c_void, CString},
-    iter::Iterator,
-    net::Ipv4Addr,
-    ptr::null_mut,
-    time::Duration,
-    vec::Vec,
-};
-
 #[macro_export]
 macro_rules! CPS_INIT {
     () => {
@@ -56,6 +63,69 @@ macro_rules! CPS_INIT {
 
 pub extern "C" fn cps_init() {
     bdev::nexus::register_module();
+}
+
+extern "C" fn log_impl(
+    level: i32,
+    file: *const c_char,
+    line: u32,
+    _func: *const c_char,
+    buf: *const c_char,
+    _n: i32, // the number of bytes written into buf
+) {
+    unsafe {
+        let fmt = CStr::from_ptr(buf).to_str().unwrap().trim_end();
+        let filename = CStr::from_ptr(file).to_str().unwrap();
+
+        if spdk_log_get_print_level() < level {
+            return;
+        }
+
+        let lvl = match level {
+            -1 => return,
+            0 => Level::Error,
+            1 => Level::Warn,
+            2 => Level::Info,
+            3 => Level::Debug,
+            4 => Level::Trace,
+            _ => Level::Error,
+        };
+
+        logger().log(
+            &Record::builder()
+                .args(format_args!("{}", fmt))
+                .target(module_path!())
+                .file(Some(filename))
+                .line(Some(line))
+                .level(lvl)
+                .build(),
+        );
+    }
+}
+
+pub fn mayastor_logger_init(level: &str) {
+    let filter_expr = format!("{}={}", module_path!(), level);
+    let mut builder =
+        Builder::from_env(Env::default().default_filter_or(filter_expr));
+
+    builder.format(|buf, record| {
+        let mut level_style = buf.default_level_style(record.level());
+        level_style.set_intense(true);
+        writeln!(
+            buf,
+            "[{} {} {}:{}] {}",
+            buf.timestamp_nanos(),
+            level_style.value(record.level()),
+            Path::new(record.file().unwrap())
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            record.line().unwrap(),
+            record.args()
+        )
+    });
+    builder.init();
 }
 
 // A callback to print help for extra options that we use.
@@ -125,6 +195,11 @@ where
 
     opts.name = CString::new(name).unwrap().into_raw();
     opts.shutdown_cb = Some(mayastor_shutdown_cb);
+    opts.log = Some(maya_log);
+
+    unsafe {
+        spdk_sys::logfn = Some(log_impl);
+    }
 
     unsafe {
         let rc = spdk_app_start(
