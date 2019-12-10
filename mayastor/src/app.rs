@@ -1,4 +1,5 @@
 use spdk_sys::{
+    __log_init,
     spdk_app_shutdown_cb,
     spdk_cpuset_alloc,
     spdk_cpuset_set_cpu,
@@ -27,12 +28,24 @@ extern "C" {
     pub fn bootstrap_fn(arg: *mut libc::c_void);
 }
 
-#[link(name = "spdk_fat")]
-extern "C" {
-    static mut g_reactor_state: u32;
-}
+//extern "C" {
+//    static mut logfn: Option<
+//        extern "C" fn(
+//            level: u32,
+//            file: *mut char,
+//            line: u32,
+//            func: *mut char,
+//            buf: *mut char,
+//        ),
+//    >;
+//}
 
-use std::ffi::CString;
+use std::{
+    ffi::{CStr, CString},
+    os::raw::{c_char, c_void},
+};
+use va_list::VaList;
+
 const RTE_LOGTYPE_EAL: i32 = 0;
 const RTE_LOG_NOTICE: i32 = 1;
 const RTE_LOG_DEBUG: i32 = 8;
@@ -250,14 +263,14 @@ impl MsAppOpts {
 /// make Result()
 /// move to impl of app?
 pub fn eal_init(opts: &MsAppOpts) -> i32 {
-    println!("Intialiazing MayaStor v0.01 (SPDK: xxx, DPDK xxxx)");
+    println!("Initializing Mayastor v0.01");
 
     let env_opts = opts.to_env_opts();
 
     let rc = unsafe { rte_log_set_level(RTE_LOGTYPE_EAL, RTE_LOG_DEBUG) };
     let rc = unsafe {
         rte_eal_init(
-            (env_opts.len() as libc::c_int) -1,
+            (env_opts.len() as libc::c_int) - 1,
             env_opts.as_ptr() as *mut *mut i8,
         )
     };
@@ -284,8 +297,8 @@ pub fn mayastor_start() -> i32 {
     // we dont want to inherit that so assert DPDK version here
     //
 
-    let log = SpdkLog::new();
-    log.init().expect("Failed to set logger");
+    //    let log = SpdkLog::new();
+    //    log.init().expect("Failed to set logger");
 
     let mut app_opts = MsAppOpts::new();
     let cargs = app_opts.to_env_opts();
@@ -312,6 +325,29 @@ pub fn mayastor_start() -> i32 {
     unsafe {
         spdk_cpuset_zero(cpu_mask);
         spdk_cpuset_set_cpu(cpu_mask, spdk_env_get_current_core(), true);
+    }
+
+    extern "C" fn logg_fn(
+        level: u32,
+        file: *const c_char,
+        line: u32,
+        func: *const c_char,
+        buf: *const c_char,
+        n: i32,
+    ) {
+        unsafe {
+            eprintln!(
+                "{}, {}, {}, {} {}",
+                level,
+                CStr::from_ptr(file).to_str().unwrap(),
+                line,
+                CStr::from_ptr(func).to_str().unwrap(),
+                CStr::from_ptr(buf).to_str().unwrap()
+            );
+        }
+    }
+    unsafe {
+        __log_init(Some(logg_fn));
     }
 
     info!("mayastor started");
