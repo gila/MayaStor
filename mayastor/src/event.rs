@@ -21,7 +21,7 @@ pub trait MayaCtx {
 pub type EventFn = extern "C" fn(*mut c_void, *mut c_void);
 
 #[derive(Debug)]
-pub struct Mthread(*mut spdk_thread);
+pub struct Mthread(pub *mut spdk_thread);
 
 impl Mthread {
     pub fn with<F: FnOnce()>(self, f: F) -> Self {

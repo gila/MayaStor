@@ -4,17 +4,24 @@ extern crate libc;
 extern crate log;
 
 use std::path::Path;
+use structopt::StructOpt;
 
 use git_version::git_version;
 
-use mayastor::{mayastor_logger_init, mayastor_start};
+use mayastor::{
+    mayastor_env::{MayastorCliArgs, MayastorOpt},
+    mayastor_logger_init,
+    mayastor_start,
+};
 use sysfs;
 
 mayastor::CPS_INIT!();
 
 fn main() -> Result<(), std::io::Error> {
     // setup our logger first
-    mayastor_logger_init("INFO");
+    mayastor_logger_init("TRACE");
+
+    let args = MayastorCliArgs::from_args();
 
     let hugepage_path = Path::new("/sys/kernel/mm/hugepages/hugepages-2048kB");
     let nr_pages: u32 = sysfs::parse_value(&hugepage_path, "nr_hugepages")?;
@@ -29,9 +36,18 @@ fn main() -> Result<(), std::io::Error> {
 
     info!("free_pages: {} nr_pages: {}", free_pages, nr_pages);
 
-    mayastor_start("Mayastor", std::env::args().collect(), || {
-        info!("Mayastor started {} ({})...", '\u{1F680}', git_version!());
-    });
+    //    mayastor_start("Mayastor", std::env::args().collect(), || {
+    //        info!("Mayastor started {} ({})...", '\u{1F680}', git_version!());
+    //    });
+    dbg!(&args);
+    let mut m = MayastorOpt::default();
+    m.config_file = "/home/gila/nvme.conf".into();
+
+    dbg!(&m);
+    dbg!(m.read_config_file());
+    dbg!(m.install_signal_handlers());
+    dbg!(m.start_eal());
+    dbg!(m.start());
 
     Ok(())
 }
