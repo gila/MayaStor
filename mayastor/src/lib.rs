@@ -25,6 +25,7 @@ use std::{
     vec::Vec,
 };
 
+use crate::mayastor_env::MayastorCliArgs;
 use env_logger::{Builder, Env};
 use spdk_sys::{
     maya_log,
@@ -46,6 +47,7 @@ pub mod executor;
 pub mod iscsi_dev;
 pub mod iscsi_target;
 pub mod jsonrpc;
+pub mod mayastor_env;
 pub mod nexus_uri;
 pub mod nvme_dev;
 pub mod nvmf_target;
@@ -294,6 +296,51 @@ where
     executor::spawn(fut);
 }
 
+extern "C" fn app_start_motor(arg1: *mut c_void) {
+    // use in cases when you want to burn less cpu and speed does not matter
+    if let Some(_key) = env::var_os("DELAY") {
+        warn!("*** Delaying reactor every 1000us ***");
+        unsafe {
+            spdk_sys::spdk_poller_register(
+                Some(developer_delay),
+                std::ptr::null_mut(),
+                1000,
+            )
+        };
+    }
+    let address = match env::var("MY_POD_IP") {
+        Ok(val) => {
+            let _ipv4: Ipv4Addr = match val.parse() {
+                Ok(val) => val,
+                Err(_) => {
+                    error!("Invalid IP address: MY_POD_IP={}", val);
+                    mayastor_stop(-1);
+                    return;
+                }
+            };
+            val
+        }
+        Err(_) => "127.0.0.1".to_owned(),
+    };
+    executor::start();
+    pool::register_pool_methods();
+    replica::register_replica_methods();
+    if let Err(msg) = iscsi_target::init_iscsi(&address) {
+        error!("Failed to initialize Mayastor iscsi: {}", msg);
+        mayastor_stop(-1);
+        return;
+    }
+
+    // asynchronous initialization routines
+    let fut = async move {
+        if let Err(msg) = nvmf_target::init_nvmf(&address).await {
+            error!("Failed to initialize Mayastor nvmf target: {}", msg);
+            mayastor_stop(-1);
+            return;
+        }
+    };
+    executor::spawn(fut);
+}
 /// Cleanly exit from the program.
 /// NOTE: cannot be called from a future -> double borrow of executor.
 pub fn mayastor_stop(rc: i32) {

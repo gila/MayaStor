@@ -28,18 +28,6 @@ extern "C" {
     pub fn bootstrap_fn(arg: *mut libc::c_void);
 }
 
-//extern "C" {
-//    static mut logfn: Option<
-//        extern "C" fn(
-//            level: u32,
-//            file: *mut char,
-//            line: u32,
-//            func: *mut char,
-//            buf: *mut char,
-//        ),
-//    >;
-//}
-
 use std::{
     ffi::{CStr, CString},
     os::raw::{c_char, c_void},
