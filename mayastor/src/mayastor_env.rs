@@ -1,5 +1,7 @@
 use std::{env, ffi::CString, os::raw::c_void};
 
+static mut init_thread: Option<Mthread> = None;
+
 use nix::sys::{
     signal,
     signal::{
@@ -10,7 +12,7 @@ use nix::sys::{
         Signal::{SIGINT, SIGTERM},
     },
 };
-use snafu::{ensure, Backtrace, ErrorCompat, ResultExt, Snafu};
+use snafu::{Backtrace, ErrorCompat, ResultExt, Snafu};
 use structopt::StructOpt;
 
 use spdk_sys::{
@@ -65,6 +67,13 @@ extern "C" {
         f: Option<extern "C" fn(i32, *mut c_void)>,
         ctx: *mut c_void,
     );
+
+    pub fn spdk_subsystem_fini(
+        f: Option<unsafe extern "C" fn(*mut c_void)>,
+        ctx: *mut c_void,
+    );
+
+    pub fn spdk_rpc_finish();
     pub fn spdk_rpc_initialize(listen: *mut libc::c_char);
 }
 
@@ -151,13 +160,24 @@ impl Default for MayastorConfig {
     }
 }
 
+extern "C" fn mayastor_env_stop(arg: *mut c_void) {
+    unsafe {
+        if let Some(t) = init_thread.as_ref() {
+            t.with(|| {
+                spdk_rpc_finish();
+                spdk_subsystem_fini(
+                    Some(spdk_reactors_stop),
+                    std::ptr::null_mut(),
+                )
+            });
+        }
+    }
+}
+
 /// called on SIGINT and SIGTERM
 extern "C" fn signal_handler(signo: i32) {
     warn!("Received signo {}, shutting down", signo);
-    unsafe {
-        spdk_app_stop(0);
-    }
-    unsafe { spdk_reactors_stop() };
+    unsafe { mayastor_env_stop(std::ptr::null_mut()) };
 }
 
 impl MayastorConfig {
@@ -447,10 +467,7 @@ impl MayastorConfig {
             executor::spawn(fut);
         });
 
-        mt.with(|| {
-            info!("starting our setup");
-        });
-
+        unsafe { init_thread = Some(mt) };
         unsafe { spdk_reactors_start() }
 
         Ok(())
