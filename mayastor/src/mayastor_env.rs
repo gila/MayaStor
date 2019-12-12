@@ -1,4 +1,4 @@
-use std::{ffi::CString, os::raw::c_void};
+use std::{env, ffi::CString, os::raw::c_void};
 
 use nix::sys::{
     signal,
@@ -40,7 +40,19 @@ use spdk_sys::{
     SPDK_RPC_RUNTIME,
 };
 
-use crate::{app_start_cb, app_start_motor, event::Mthread, log_impl};
+use crate::{
+    app_start_cb,
+    app_start_motor,
+    developer_delay,
+    event::Mthread,
+    executor,
+    log_impl,
+    mayastor_stop,
+    nvmf_target,
+    pool,
+    replica,
+};
+use std::net::Ipv4Addr;
 
 extern "C" {
     pub fn rte_eal_init(argc: i32, argv: *mut *mut libc::c_char) -> i32;
@@ -50,7 +62,7 @@ extern "C" {
     pub fn spdk_reactors_stop() -> libc::c_void;
     pub fn bootstrap_fn(arg: *mut libc::c_void);
     pub fn spdk_subsystem_init(
-        f: extern "C" fn(i32, *mut c_void),
+        f: Option<extern "C" fn(i32, *mut c_void)>,
         ctx: *mut c_void,
     );
     pub fn spdk_rpc_initialize(listen: *mut libc::c_char);
@@ -72,19 +84,18 @@ type Result<T, E = EnvError> = std::result::Result<T, E>;
     about = "Containerized Attached Storage (CAS) for k8s",
     raw(setting = "structopt::clap::AppSettings::ColoredHelp")
 )]
-
 pub struct MayastorCliArgs {
     #[structopt(short = "m", default_value = "0x1")]
     reactor_mask: String,
     #[structopt(short = "u")]
     no_pci: bool,
-    #[structopt(short = "L")]
-    log_flag: Vec<String>,
+    /*    #[structopt(short = "L")]
+     *    log_flag: Vec<String>, */
 }
 
 /// Mayastor argument
 #[derive(Debug)]
-pub struct MayastorOpt {
+pub struct MayastorConfig {
     pub config_file: String,
     delay_subsystem_init: bool,
     enable_coredump: bool,
@@ -110,7 +121,7 @@ pub struct MayastorOpt {
     unlink_hugepage: bool,
 }
 
-impl Default for MayastorOpt {
+impl Default for MayastorConfig {
     fn default() -> Self {
         Self {
             config_file: String::new(),
@@ -146,10 +157,18 @@ extern "C" fn signal_handler(signo: i32) {
     unsafe {
         spdk_app_stop(0);
     }
-    //unsafe { spdk_reactors_stop() };
+    unsafe { spdk_reactors_stop() };
 }
 
-impl MayastorOpt {
+impl MayastorConfig {
+    pub fn new(args: MayastorCliArgs) -> Self {
+        Self {
+            reactor_mask: args.reactor_mask,
+            no_pci: args.no_pci,
+            ..Default::default()
+        }
+    }
+
     /// configure signal handling
     pub fn install_signal_handlers(&self) -> Result<()> {
         // first set that we ignore SIGPIPE
@@ -174,6 +193,10 @@ impl MayastorOpt {
 
     /// read the config file we use this mostly for testing
     pub fn read_config_file(&self) -> Result<()> {
+        if self.config_file.is_empty() {
+            return Ok(());
+        }
+
         let path = CString::new(self.config_file.as_str()).unwrap();
         let config = unsafe { spdk_conf_allocate() };
 
@@ -287,8 +310,6 @@ impl MayastorOpt {
             args.push(CString::new(self.env_context.clone()).unwrap());
         }
 
-        debug!("EAL args: {:?}", args);
-
         let mut cargs = args
             .iter()
             .map(|arg| arg.as_ptr())
@@ -307,49 +328,14 @@ impl MayastorOpt {
         }
     }
 
-    //    extern "C" fn subsystem_callback(rc: i32, ctx: *mut c_void) {
-    //        return;
-    //        //        unsafe {
-    //        //            let margs = unsafe { &*(ctx as *mut MayastorOpt) };
-    //        //            let rpc =
-    // CString::new(margs.rpc_addr.as_str()).unwrap();        //
-    // if rc != 0 {        //                spdk_app_stop(rc);
-    //        //                return;
-    //        //            }
-    //        //            spdk_rpc_initialize(rpc.as_ptr() as *mut i8);
-    //        //            spdk_rpc_set_state(SPDK_RPC_RUNTIME);
-    //        //
-    //        //            app_start_motor(ctx);
-    //        //        }
-    //    }
-    //
-    //    extern "C" fn bootstrap(arg: *mut c_void) {
-    //        unsafe { spdk_subsystem_init(Self::subsystem_callback, arg) }
-    //    }
-
-    pub fn start(&self) -> Result<()> {
-        if self.enable_coredump {
-            warn!("rlimit configuration not implemented");
-        }
-
-        unsafe {
-            spdk_log_set_level(SPDK_LOG_DEBUG);
-            spdk_log_set_print_level(SPDK_LOG_DEBUG);
-            spdk_log_open(Some(maya_log));
-            spdk_sys::logfn = Some(log_impl);
-        }
-
-        info!("Total number of cores available: {}", unsafe {
-            spdk_env_get_core_count()
-        });
-
+    /// Setup a "stackless thread", which will be our management thread.
+    fn init_main_thread(&self) -> Result<Mthread> {
         let rc = unsafe { spdk_reactors_init() };
 
         if rc != 0 {
             error!("Failed to initialize reactors, there is no point to continue, error code: {}", rc);
             std::process::exit(rc);
         }
-
         let cpu_mask = unsafe { spdk_cpuset_alloc() };
 
         if cpu_mask.is_null() {
@@ -370,37 +356,102 @@ impl MayastorOpt {
 
         if thread.is_null() {
             error!("Failed to allocate the main thread");
-            std::process::exit(1);
+            std::process::exit(1)
         }
+        Ok(Mthread(thread))
+    }
+
+    fn init_logger(&self) {
+        unsafe {
+            spdk_log_set_level(SPDK_LOG_DEBUG);
+            spdk_log_set_print_level(SPDK_LOG_DEBUG);
+            spdk_log_open(Some(maya_log));
+            spdk_sys::logfn = Some(log_impl);
+        }
+    }
+
+    pub fn start(&self) -> Result<()> {
+        self.read_config_file()?;
+        let _ = self.start_eal();
+        self.init_logger();
+
+        if self.enable_coredump {
+            warn!("rlimit configuration not implemented");
+        }
+
+        info!("Total number of cores available: {}", unsafe {
+            spdk_env_get_core_count()
+        });
 
         self.install_signal_handlers()?;
 
-        Mthread(thread).with(|| unsafe {
-            spdk_subsystem_init(
-                Self::subsystem_callback,
-                *&self as *const _ as *mut _,
-            );
+        let mt = self.init_main_thread()?;
+
+        mt.with(|| unsafe {
+            // unfortunately, some globals are set and touched that deal with,
+            // among others iSCSI configuration, so we need to call
+            // this subsystem init function for now with an empty callback.
+
+            extern "C" fn silly(_rc: i32, _arg: *mut c_void) {}
+
+            spdk_subsystem_init(Some(silly), std::ptr::null_mut());
         });
 
-        Mthread(thread).with(|| unsafe {
+        // start the RCP server
+        mt.with(|| unsafe {
             let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
-            if rc != 0 {
-                spdk_app_stop(rc);
-                return;
-            }
             spdk_rpc_initialize(rpc.as_ptr() as *mut i8);
             spdk_rpc_set_state(SPDK_RPC_RUNTIME);
         });
 
-        //        unsafe {
-        //            spdk_thread_send_msg(
-        //                thread,
-        //                Some(Self::bootstrap),
-        //                &*self as *const _ as *mut _,
-        //            );
-        //
-        //            spdk_reactors_start();
-        //        }
+        executor::start();
+        pool::register_pool_methods();
+        replica::register_replica_methods();
+
+        mt.with(|| {
+            if let Some(_key) = env::var_os("DELAY") {
+                warn!("*** Delaying reactor every 1000us ***");
+                unsafe {
+                    spdk_sys::spdk_poller_register(
+                        Some(developer_delay),
+                        std::ptr::null_mut(),
+                        1000,
+                    )
+                };
+            }
+            let address = match env::var("MY_POD_IP") {
+                Ok(val) => {
+                    let _ipv4: Ipv4Addr = match val.parse() {
+                        Ok(val) => val,
+                        Err(_) => {
+                            error!("Invalid IP address: MY_POD_IP={}", val);
+                            mayastor_stop(-1);
+                            return;
+                        }
+                    };
+                    val
+                }
+                Err(_) => "127.0.0.1".to_owned(),
+            };
+
+            let fut = async move {
+                if let Err(msg) = nvmf_target::init_nvmf(&address).await {
+                    error!(
+                        "Failed to initialize Mayastor nvmf target: {}",
+                        msg
+                    );
+                    mayastor_stop(-1);
+                    return;
+                }
+            };
+            executor::spawn(fut);
+        });
+
+        mt.with(|| {
+            info!("starting our setup");
+        });
+
+        unsafe { spdk_reactors_start() }
 
         Ok(())
     }

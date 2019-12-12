@@ -9,7 +9,7 @@ use structopt::StructOpt;
 use git_version::git_version;
 
 use mayastor::{
-    mayastor_env::{MayastorCliArgs, MayastorOpt},
+    mayastor_env::{MayastorCliArgs, MayastorConfig},
     mayastor_logger_init,
     mayastor_start,
 };
@@ -36,18 +36,6 @@ fn main() -> Result<(), std::io::Error> {
 
     info!("free_pages: {} nr_pages: {}", free_pages, nr_pages);
 
-    //    mayastor_start("Mayastor", std::env::args().collect(), || {
-    //        info!("Mayastor started {} ({})...", '\u{1F680}', git_version!());
-    //    });
-    dbg!(&args);
-    let mut m = MayastorOpt::default();
-    m.config_file = "/home/gila/nvme.conf".into();
-
-    dbg!(&m);
-    dbg!(m.read_config_file());
-    dbg!(m.install_signal_handlers());
-    dbg!(m.start_eal());
-    dbg!(m.start());
-
+    MayastorConfig::new(args).start().unwrap();
     Ok(())
 }

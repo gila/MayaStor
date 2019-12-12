@@ -20,7 +20,7 @@ pub trait MayaCtx {
 
 pub type EventFn = extern "C" fn(*mut c_void, *mut c_void);
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Mthread(pub *mut spdk_thread);
 
 impl Mthread {
@@ -40,19 +40,19 @@ impl Mthread {
     }
 }
 
-impl Drop for Mthread {
-    /// there is a bug in thread_destroy() as it does not remove the thread from
-    /// the lw_thread queue this results in a segfault when the reactor
-    /// shuts down.
-    ///
-    /// Workaround: dont free the thread for now, you can re-use the thread
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            //spdk_thread_exit(self.0);
-            //spdk_thread_destroy(self.0);
-        }
-    }
-}
+//impl Drop for Mthread {
+//    /// there is a bug in thread_destroy() as it does not remove the thread
+// from    /// the lw_thread queue this results in a segfault when the reactor
+//    /// shuts down.
+//    ///
+//    /// Workaround: dont free the thread for now, you can re-use the thread
+//    fn drop(&mut self) {
+//        if !self.0.is_null() {
+//            //spdk_thread_exit(self.0);
+//            //spdk_thread_destroy(self.0);
+//        }
+//    }
+//}
 
 ///
 /// spawn closure `F` on the reactor running on core `core`. This function must
