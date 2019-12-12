@@ -36,6 +36,8 @@ use spdk_sys::{
     spdk_pci_addr,
     spdk_rpc_set_state,
     spdk_thread_create,
+    spdk_thread_destroy,
+    spdk_thread_exit,
     spdk_thread_send_msg,
     SPDK_LOG_DEBUG,
     SPDK_LOG_INFO,
@@ -98,6 +100,8 @@ pub struct MayastorCliArgs {
     reactor_mask: String,
     #[structopt(short = "u")]
     no_pci: bool,
+    #[structopt(short = "c", default_value = "")]
+    config: String,
     /*    #[structopt(short = "L")]
      *    log_flag: Vec<String>, */
 }
@@ -105,7 +109,7 @@ pub struct MayastorCliArgs {
 /// Mayastor argument
 #[derive(Debug)]
 pub struct MayastorConfig {
-    pub config_file: String,
+    config: String,
     delay_subsystem_init: bool,
     enable_coredump: bool,
     env_context: String,
@@ -133,7 +137,7 @@ pub struct MayastorConfig {
 impl Default for MayastorConfig {
     fn default() -> Self {
         Self {
-            config_file: String::new(),
+            config: String::new(),
             delay_subsystem_init: false,
             enable_coredump: true,
             env_context: String::new(),
@@ -185,6 +189,7 @@ impl MayastorConfig {
         Self {
             reactor_mask: args.reactor_mask,
             no_pci: args.no_pci,
+            config: args.config,
             ..Default::default()
         }
     }
@@ -197,6 +202,7 @@ impl MayastorConfig {
 
         // setup that we want signal_handler to be invoked on SIGINT and SIGTERM
         let handler = SigHandler::Handler(signal_handler);
+
         unsafe {
             signal::signal(SIGINT, handler).context(SetSigHdl)?;
             signal::signal(SIGTERM, handler).context(SetSigHdl)?;
@@ -205,6 +211,7 @@ impl MayastorConfig {
         let mut mask = SigSet::empty();
         mask.add(SIGINT);
         mask.add(SIGTERM);
+
         pthread_sigmask(SigmaskHow::SIG_UNBLOCK, Some(&mask), None)
             .context(SetSigHdl)?;
 
@@ -213,11 +220,11 @@ impl MayastorConfig {
 
     /// read the config file we use this mostly for testing
     pub fn read_config_file(&self) -> Result<()> {
-        if self.config_file.is_empty() {
+        if self.config.is_empty() {
             return Ok(());
         }
 
-        let path = CString::new(self.config_file.as_str()).unwrap();
+        let path = CString::new(self.config.as_str()).unwrap();
         let config = unsafe { spdk_conf_allocate() };
 
         assert_ne!(config, std::ptr::null_mut());
@@ -392,7 +399,7 @@ impl MayastorConfig {
 
     pub fn start(&self) -> Result<()> {
         self.read_config_file()?;
-        let _ = self.start_eal();
+        self.start_eal();
         self.init_logger();
 
         if self.enable_coredump {
@@ -439,6 +446,7 @@ impl MayastorConfig {
                     )
                 };
             }
+
             let address = match env::var("MY_POD_IP") {
                 Ok(val) => {
                     let _ipv4: Ipv4Addr = match val.parse() {
