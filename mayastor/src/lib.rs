@@ -350,7 +350,7 @@ pub fn mayastor_stop(rc: i32) {
             error!("Failed to finalize nvmf target: {}", msg);
         }
     };
-    executor::stop(fut, Box::new(move || unsafe { spdk_app_stop(rc) }));
+    executor::stop(fut, Box::new(move || info!("targets stopped")));
 }
 
 /// A callback called by spdk when it is shutting down.

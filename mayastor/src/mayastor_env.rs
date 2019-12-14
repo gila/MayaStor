@@ -63,7 +63,7 @@ extern "C" {
     pub fn rte_log_set_level(_type: i32, level: i32) -> i32;
     pub fn spdk_reactors_init() -> i32;
     pub fn spdk_reactors_start();
-    pub fn spdk_reactors_stop() -> libc::c_void;
+    pub fn spdk_reactors_stop(ctx: *mut c_void);
     pub fn bootstrap_fn(arg: *mut libc::c_void);
     pub fn spdk_subsystem_init(
         f: Option<extern "C" fn(i32, *mut c_void)>,
@@ -77,6 +77,9 @@ extern "C" {
 
     pub fn spdk_rpc_finish();
     pub fn spdk_rpc_initialize(listen: *mut libc::c_char);
+    pub fn spdk_reactors_fini();
+    pub fn spdk_log_close();
+    pub fn spdk_env_fini();
 }
 
 #[derive(Debug, Snafu)]
@@ -168,6 +171,8 @@ extern "C" fn mayastor_env_stop(arg: *mut c_void) {
     unsafe {
         if let Some(t) = init_thread.as_ref() {
             t.with(|| {
+                info!("shutdown..");
+                mayastor_stop(0);
                 spdk_rpc_finish();
                 spdk_subsystem_fini(
                     Some(spdk_reactors_stop),
@@ -477,7 +482,12 @@ impl MayastorConfig {
 
         unsafe { init_thread = Some(mt) };
         unsafe { spdk_reactors_start() }
-
+        unsafe {
+            info!("main unblocked...");
+            spdk_reactors_fini();
+            spdk_env_fini();
+            spdk_log_close();
+        }
         Ok(())
     }
 }
