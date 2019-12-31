@@ -7,7 +7,7 @@ use mayastor::{
 };
 
 static DISKNAME1: &str = "/tmp/disk1.img";
-static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
+static BDEVNAME1: &str = "aio:///tmp/disk3.img?blk_size=512";
 
 static DISKNAME2: &str = "/tmp/disk2.img";
 static BDEVNAME2: &str = "aio:///tmp/disk2.img?blk_size=512";
