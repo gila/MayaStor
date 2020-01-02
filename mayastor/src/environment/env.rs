@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use once_cell::sync::{OnceCell, Lazy};
+use once_cell::sync::{Lazy, OnceCell};
 
 use nix::sys::{
     signal,
@@ -58,10 +58,10 @@ use crate::{
 };
 
 static INIT_THREAD: OnceCell<Mthread> = OnceCell::new();
-
-/// global return code for the whole program. We must use ARC here to make proper use of
-/// lazy_static crate. It could have been a static mut all the same.
-pub static GLOBAL_RC: Lazy<Arc<Mutex<i32>>> = Lazy::new(|| Arc::new(Mutex::new(0)));
+/// Global exit code of the program, initially set to -1 to capture double
+/// shutdown during test cases
+pub static GLOBAL_RC: Lazy<Arc<Mutex<i32>>> =
+    Lazy::new(|| Arc::new(Mutex::new(-1)));
 
 /// FFI functions that are needed to initialize the environment
 extern "C" {
@@ -178,6 +178,16 @@ extern "C" fn _mayastor_shutdown_cb(arg: *mut c_void) {
         warn!("Mayastor stopped non-zero: {}", rc);
     }
 
+    let rc_current = *GLOBAL_RC.lock().unwrap();
+
+    if rc_current != -1 {
+        // we already shut down once -- so really, there not anything left to do
+        // here then exit. the reason for the potential double exit
+        // comes from the test cases when we fail to shutdown (due to an
+        // open device for example) and then hit ctrl+c again.
+        std::process::exit(rc_current);
+    }
+
     *GLOBAL_RC.lock().unwrap() = rc;
 
     iscsi_target::fini_iscsi();
@@ -191,7 +201,9 @@ extern "C" fn _mayastor_shutdown_cb(arg: *mut c_void) {
         fut,
         Box::new(|| unsafe {
             spdk_rpc_finish();
+            debug!("RPC server stopped");
             spdk_subsystem_fini(Some(spdk_reactors_stop), std::ptr::null_mut());
+            debug!("subsystem fini dispatched");
         }),
     );
 }
@@ -356,7 +368,7 @@ impl MayastorEnvironment {
                 CString::new(format!("--file-prefix=mayastor_pid{}", unsafe {
                     libc::getpid()
                 }))
-                    .unwrap(),
+                .unwrap(),
             );
         } else {
             args.push(
@@ -364,7 +376,7 @@ impl MayastorEnvironment {
                     "--file-prefix=mayastor_pid{}",
                     self.shm_id
                 ))
-                    .unwrap(),
+                .unwrap(),
             );
             args.push(CString::new("--proc-type=auto").unwrap());
         }
@@ -440,7 +452,9 @@ impl MayastorEnvironment {
             std::process::exit(1)
         }
 
-        INIT_THREAD.set(Mthread::from_null_checked(thread).unwrap()).unwrap();
+        INIT_THREAD
+            .set(Mthread::from_null_checked(thread).unwrap())
+            .unwrap();
 
         Ok(())
     }
@@ -525,8 +539,8 @@ impl MayastorEnvironment {
 
     /// start mayastor and call f when all is setup.
     pub fn start<F>(&mut self, f: F) -> Result<i32>
-        where
-            F: FnOnce(),
+    where
+        F: FnOnce(),
     {
         self.read_config_file()?;
         self.initialize_eal();

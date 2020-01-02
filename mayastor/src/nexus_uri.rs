@@ -141,11 +141,11 @@ fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevError> {
 }
 
 /// Parse URI and destroy bdev described in the URI.
-pub async fn bdev_destroy(uri: &str, bdev_name: &str) -> Result<(), BdevError> {
+pub async fn bdev_destroy(uri: &str) -> Result<(), BdevError> {
     match nexus_parse_uri(uri)? {
-        BdevType::Aio(args) => args.destroy(bdev_name).await,
-        BdevType::Iscsi(args) => args.destroy(bdev_name).await,
-        BdevType::Nvmf(args) => args.destroy(bdev_name),
+        BdevType::Aio(args) => args.destroy().await,
+        BdevType::Iscsi(args) => args.destroy().await,
+        BdevType::Nvmf(args) => args.destroy(),
         BdevType::Bdev(_) => Ok(()),
     }
 }

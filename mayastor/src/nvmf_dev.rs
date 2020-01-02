@@ -128,10 +128,13 @@ impl NvmfBdev {
     }
 
     /// destroy nvme bdev
-    pub fn destroy(self, bdev_name: &str) -> Result<(), BdevError> {
-        if bdev_lookup_by_name(bdev_name).is_none() {
+    pub fn destroy(self) -> Result<(), BdevError> {
+        // the namespace instance is appended to the nvme bdev, we currently
+        // only support one namespace per bdev.
+
+        if bdev_lookup_by_name(&format!("{}{}", &self.name, "n1")).is_none() {
             return Err(BdevError::BdevNotFound {
-                name: bdev_name.to_owned(),
+                name: self.name,
             });
         }
         let cname = CString::new(self.name.clone()).unwrap();

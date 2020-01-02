@@ -31,6 +31,7 @@ pub mod rebuild;
 pub mod replica;
 pub mod spdklog;
 
+pub mod core;
 #[macro_export]
 macro_rules! CPS_INIT {
     () => {

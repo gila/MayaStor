@@ -1,28 +1,24 @@
+use std::{fmt::Display, rc::Rc};
+
 use nix::errno::Errno;
 use serde::{export::Formatter, Serialize};
 use snafu::{ResultExt, Snafu};
+
 use spdk_sys::{
     spdk_bdev_get_io_channel,
-    spdk_bdev_module_claim_bdev,
     spdk_bdev_module_release_bdev,
     spdk_io_channel,
 };
-use std::fmt::Display;
 
 use crate::{
     bdev::{
-        nexus::{
-            nexus_label::{GPTHeader, GptEntry, NexusLabel},
-            nexus_module::NEXUS_MODULE,
-        },
+        nexus::nexus_label::{GPTHeader, GptEntry, NexusLabel},
         Bdev,
     },
     descriptor::{DescError, Descriptor},
     dma::{DmaBuf, DmaError},
-    executor::errno_result_from_i32,
     nexus_uri::{bdev_destroy, BdevError},
 };
-use std::rc::Rc;
 
 #[derive(Debug, Snafu)]
 pub enum ChildError {
@@ -177,19 +173,6 @@ impl NexusChild {
                 }
             };
 
-            // TODO: This should be a method in bdev module
-            let errno = unsafe {
-                spdk_bdev_module_claim_bdev(
-                    bdev.inner,
-                    desc.as_ptr(),
-                    &NEXUS_MODULE.as_ptr() as *const _ as *mut _,
-                )
-            };
-            if let Err(err) = errno_result_from_i32((), errno) {
-                self.state = ChildState::Faulted;
-                return Err(err).context(ClaimChild {});
-            }
-
             self.descriptor = Some(Rc::new(desc));
             self.state = ChildState::Open;
 
@@ -213,7 +196,9 @@ impl NexusChild {
 
         if let Some(bdev) = self.bdev.as_ref() {
             unsafe {
-                spdk_bdev_module_release_bdev(bdev.inner);
+                if !(*bdev.inner).internal.claim_module.is_null() {
+                    spdk_bdev_module_release_bdev(bdev.inner);
+                }
             }
         }
 
@@ -253,8 +238,8 @@ impl NexusChild {
     /// destroy the child bdev
     pub(crate) async fn destroy(&mut self) -> Result<(), BdevError> {
         assert_eq!(self.state, ChildState::Closed);
-        if let Some(bdev) = &self.bdev {
-            bdev_destroy(&self.name, &bdev.name()).await
+        if let Some(_bdev) = &self.bdev {
+            bdev_destroy(&self.name).await
         } else {
             warn!("Destroy child without bdev");
             Ok(())

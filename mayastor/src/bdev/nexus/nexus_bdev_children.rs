@@ -97,7 +97,7 @@ impl Nexus {
                 if child.block_len() != self.bdev.block_len()
                     || self.min_num_blocks() < child.num_blocks()
                 {
-                    if let Err(err) = bdev_destroy(uri, &name).await {
+                    if let Err(err) = bdev_destroy(uri).await {
                         error!(
                             "Failed to destroy child bdev with wrong geometry: {}",
                             err
@@ -142,7 +142,7 @@ impl Nexus {
                 Ok(self.set_state(NexusState::Degraded))
             }
             Err(e) => {
-                if let Err(err) = bdev_destroy(uri, &name).await {
+                if let Err(err) = bdev_destroy(uri).await {
                     error!(
                         "Failed to destroy child which failed to open: {}",
                         err

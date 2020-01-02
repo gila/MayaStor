@@ -71,8 +71,8 @@ impl IscsiBdev {
     }
 
     // destroy the given bdev
-    pub async fn destroy(self, bdev_name: &str) -> Result<(), BdevError> {
-        if let Some(bdev) = bdev_lookup_by_name(bdev_name) {
+    pub async fn destroy(self) -> Result<(), BdevError> {
+        if let Some(bdev) = bdev_lookup_by_name(&self.name) {
             let (s, r) = oneshot::channel::<ErrnoResult<()>>();
             unsafe {
                 delete_iscsi_disk(bdev.inner, Some(done_errno_cb), cb_arg(s));
@@ -84,7 +84,7 @@ impl IscsiBdev {
             )
         } else {
             Err(BdevError::BdevNotFound {
-                name: bdev_name.to_owned(),
+                name: self.name,
             })
         }
     }

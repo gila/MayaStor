@@ -56,8 +56,8 @@ impl AioBdev {
     }
 
     /// destroy the given aio bdev
-    pub async fn destroy(self, bdev_name: &str) -> Result<(), BdevError> {
-        if let Some(bdev) = bdev_lookup_by_name(bdev_name) {
+    pub async fn destroy(self) -> Result<(), BdevError> {
+        if let Some(bdev) = bdev_lookup_by_name(&self.name) {
             let (s, r) = oneshot::channel::<ErrnoResult<()>>();
             unsafe {
                 bdev_aio_delete(bdev.as_ptr(), Some(done_errno_cb), cb_arg(s));
