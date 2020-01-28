@@ -12,7 +12,7 @@ use url::{ParseError, Url};
 // parse URI and bdev create/destroy errors common for all types of bdevs
 #[derive(Debug, Snafu)]
 #[snafu(visibility = "pub(crate)")]
-pub enum BdevError {
+pub enum BdevCreateDestroy {
     // URI parse errors
     #[snafu(display("Invalid URI \"{}\"", uri))]
     UriInvalid { source: ParseError, uri: String },
@@ -46,31 +46,31 @@ pub enum BdevError {
     DestroyBdev { source: Errno, name: String },
 }
 
-impl RpcErrorCode for BdevError {
+impl RpcErrorCode for BdevCreateDestroy {
     fn rpc_error_code(&self) -> Code {
         match self {
-            BdevError::UriInvalid {
+            BdevCreateDestroy::UriInvalid {
                 ..
             } => Code::InvalidParams,
-            BdevError::UriSchemeUnsupported {
+            BdevCreateDestroy::UriSchemeUnsupported {
                 ..
             } => Code::InvalidParams,
-            BdevError::ParseAioUri {
+            BdevCreateDestroy::ParseAioUri {
                 ..
             } => Code::InvalidParams,
-            BdevError::ParseIscsiUri {
+            BdevCreateDestroy::ParseIscsiUri {
                 ..
             } => Code::InvalidParams,
-            BdevError::ParseNvmfUri {
+            BdevCreateDestroy::ParseNvmfUri {
                 ..
             } => Code::InvalidParams,
-            BdevError::BdevExists {
+            BdevCreateDestroy::BdevExists {
                 ..
             } => Code::AlreadyExists,
-            BdevError::BdevNotFound {
+            BdevCreateDestroy::BdevNotFound {
                 ..
             } => Code::NotFound,
-            BdevError::InvalidParams {
+            BdevCreateDestroy::InvalidParams {
                 ..
             } => Code::InvalidParams,
             _ => Code::InternalError,
@@ -95,7 +95,7 @@ pub enum BdevType {
 /// to construct the children from which we create the nexus.
 pub fn nexus_uri_parse_vec(
     uris: &[String],
-) -> Result<Vec<BdevType>, BdevError> {
+) -> Result<Vec<BdevType>, BdevCreateDestroy> {
     let mut results = Vec::new();
     for target in uris {
         results.push(nexus_parse_uri(target)?);
@@ -105,7 +105,7 @@ pub fn nexus_uri_parse_vec(
 }
 
 /// Parse the given URI into a ChildBdev
-fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevError> {
+fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevCreateDestroy> {
     let parsed_uri = Url::parse(uri).context(UriInvalid {
         uri: uri.to_owned(),
     })?;
@@ -132,7 +132,7 @@ fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevError> {
         // strip the first slash in uri path
         "bdev" => BdevType::Bdev(parsed_uri.path()[1 ..].to_string()),
         scheme => {
-            return Err(BdevError::UriSchemeUnsupported {
+            return Err(BdevCreateDestroy::UriSchemeUnsupported {
                 scheme: scheme.to_owned(),
             })
         }
@@ -141,7 +141,7 @@ fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevError> {
 }
 
 /// Parse URI and destroy bdev described in the URI.
-pub async fn bdev_destroy(uri: &str) -> Result<(), BdevError> {
+pub async fn bdev_destroy(uri: &str) -> Result<(), BdevCreateDestroy> {
     match nexus_parse_uri(uri)? {
         BdevType::Aio(args) => args.destroy().await,
         BdevType::Iscsi(args) => args.destroy().await,
@@ -152,7 +152,7 @@ pub async fn bdev_destroy(uri: &str) -> Result<(), BdevError> {
 
 /// Parse URI and create bdev described in the URI.
 /// Return the bdev name (can be different from URI).
-pub async fn bdev_create(uri: &str) -> Result<String, BdevError> {
+pub async fn bdev_create(uri: &str) -> Result<String, BdevCreateDestroy> {
     match nexus_parse_uri(uri)? {
         BdevType::Aio(args) => args.create().await,
         BdevType::Iscsi(args) => args.create().await,

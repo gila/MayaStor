@@ -17,7 +17,7 @@ use crate::{
     },
     descriptor::{DescError, Descriptor},
     dma::{DmaBuf, DmaError},
-    nexus_uri::{bdev_destroy, BdevError},
+    nexus_uri::{bdev_destroy, BdevCreateDestroy},
 };
 
 #[derive(Debug, Snafu)]
@@ -236,7 +236,7 @@ impl NexusChild {
     }
 
     /// destroy the child bdev
-    pub(crate) async fn destroy(&mut self) -> Result<(), BdevError> {
+    pub(crate) async fn destroy(&mut self) -> Result<(), BdevCreateDestroy> {
         assert_eq!(self.state, ChildState::Closed);
         if let Some(_bdev) = &self.bdev {
             bdev_destroy(&self.name).await

@@ -1,7 +1,7 @@
 use crate::{
     bdev::bdev_lookup_by_name,
     executor::{cb_arg, done_errno_cb, errno_result_from_i32, ErrnoResult},
-    nexus_uri::{self, BdevError},
+    nexus_uri::{self, BdevCreateDestroy},
 };
 use futures::channel::oneshot;
 use snafu::{ResultExt, Snafu};
@@ -30,9 +30,9 @@ pub struct AioBdev {
 impl AioBdev {
     /// create an AIO bdev. The reason this is async is to avoid type errors
     /// when creating things concurrently.
-    pub async fn create(self) -> Result<String, BdevError> {
+    pub async fn create(self) -> Result<String, BdevCreateDestroy> {
         if bdev_lookup_by_name(&self.name).is_some() {
-            return Err(BdevError::BdevExists {
+            return Err(BdevCreateDestroy::BdevExists {
                 name: self.name.clone(),
             });
         }
@@ -56,7 +56,7 @@ impl AioBdev {
     }
 
     /// destroy the given aio bdev
-    pub async fn destroy(self) -> Result<(), BdevError> {
+    pub async fn destroy(self) -> Result<(), BdevCreateDestroy> {
         if let Some(bdev) = bdev_lookup_by_name(&self.name) {
             let (s, r) = oneshot::channel::<ErrnoResult<()>>();
             unsafe {
@@ -68,7 +68,7 @@ impl AioBdev {
                 },
             )
         } else {
-            Err(BdevError::BdevNotFound {
+            Err(BdevCreateDestroy::BdevNotFound {
                 name: self.name.clone(),
             })
         }

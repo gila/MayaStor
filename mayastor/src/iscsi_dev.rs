@@ -1,7 +1,7 @@
 use crate::{
     bdev::{bdev_lookup_by_name, Bdev},
     executor::{cb_arg, done_errno_cb, errno_result_from_i32, ErrnoResult},
-    nexus_uri::{self, BdevError},
+    nexus_uri::{self, BdevCreateDestroy},
 };
 use futures::channel::oneshot;
 use snafu::{ResultExt, Snafu};
@@ -23,9 +23,9 @@ pub struct IscsiBdev {
 
 impl IscsiBdev {
     /// create an iscsi target
-    pub async fn create(self) -> Result<String, BdevError> {
+    pub async fn create(self) -> Result<String, BdevCreateDestroy> {
         if bdev_lookup_by_name(&self.name).is_some() {
-            return Err(BdevError::BdevExists {
+            return Err(BdevCreateDestroy::BdevExists {
                 name: self.name.clone(),
             });
         }
@@ -71,7 +71,7 @@ impl IscsiBdev {
     }
 
     // destroy the given bdev
-    pub async fn destroy(self) -> Result<(), BdevError> {
+    pub async fn destroy(self) -> Result<(), BdevCreateDestroy> {
         if let Some(bdev) = bdev_lookup_by_name(&self.name) {
             let (s, r) = oneshot::channel::<ErrnoResult<()>>();
             unsafe {
@@ -83,7 +83,7 @@ impl IscsiBdev {
                 },
             )
         } else {
-            Err(BdevError::BdevNotFound {
+            Err(BdevCreateDestroy::BdevNotFound {
                 name: self.name,
             })
         }

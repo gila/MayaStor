@@ -78,7 +78,7 @@ use crate::{
     dma::{DmaBuf, DmaError},
     executor::errno_result_from_i32,
     jsonrpc::{Code, RpcErrorCode},
-    nexus_uri::BdevError,
+    nexus_uri::BdevCreateDestroy,
     rebuild::RebuildTask,
 };
 use futures::channel::oneshot;
@@ -134,7 +134,10 @@ pub enum Error {
     #[snafu(display("Failed to register IO device nexus {}", name))]
     RegisterNexus { source: Errno, name: String },
     #[snafu(display("Failed to create child of nexus {}", name))]
-    CreateChild { source: BdevError, name: String },
+    CreateChild {
+        source: BdevCreateDestroy,
+        name: String,
+    },
     #[snafu(display("Deferring open because nexus {} is incomplete", name))]
     NexusIncomplete { name: String },
     #[snafu(display("Children of nexus {} have mixed block sizes", name))]
@@ -161,7 +164,7 @@ pub enum Error {
     DestroyLastChild { child: String, name: String },
     #[snafu(display("Failed to destroy child {} of nexus {}", child, name))]
     DestroyChild {
-        source: BdevError,
+        source: BdevCreateDestroy,
         child: String,
         name: String,
     },

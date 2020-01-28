@@ -40,7 +40,7 @@ use crate::{
             nexus_label::NexusLabel,
         },
     },
-    nexus_uri::{bdev_create, bdev_destroy, BdevError},
+    nexus_uri::{bdev_create, bdev_destroy, BdevCreateDestroy},
 };
 use futures::future::join_all;
 use snafu::ResultExt;
@@ -66,7 +66,10 @@ impl Nexus {
 
     /// register a single child to nexus, only allowed during the nexus init
     /// phase
-    pub async fn register_child(&mut self, uri: &str) -> Result<(), BdevError> {
+    pub async fn register_child(
+        &mut self,
+        uri: &str,
+    ) -> Result<(), BdevCreateDestroy> {
         assert_eq!(self.state, NexusState::Init);
         let name = bdev_create(&uri).await?;
         self.children.push(NexusChild::new(

@@ -14,7 +14,7 @@ use mayastor::{
     executor,
     jsonrpc::print_error_chain,
     logger,
-    nexus_uri::{bdev_create, BdevError},
+    nexus_uri::{bdev_create, BdevCreateDestroy},
 };
 use std::{
     fmt,
@@ -48,8 +48,8 @@ impl From<DmaError> for Error {
         }
     }
 }
-impl From<BdevError> for Error {
-    fn from(err: BdevError) -> Self {
+impl From<BdevCreateDestroy> for Error {
+    fn from(err: BdevCreateDestroy) -> Self {
         Self {
             msg: print_error_chain(&err),
         }
