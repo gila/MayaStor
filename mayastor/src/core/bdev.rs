@@ -19,6 +19,9 @@ use spdk_sys::{
 };
 
 use crate::core::{uuid::Uuid, Descriptor};
+// XXX FIX THIS
+use crate::descriptor::DescError;
+use nix::errno::Errno;
 
 /// Newtype structure that represents a block device. The soundness of the API
 /// is based on the fact that opening and finding of a bdev, returns a valid
@@ -54,7 +57,7 @@ impl Bdev {
     }
     /// open a bdev by its name in read_write mode. If a bdev is claimed, it can
     /// be opened for write only once.
-    pub fn open(name: &str, read_write: bool) -> Option<Descriptor> {
+    pub fn open(name: &str, read_write: bool) -> Result<Descriptor, DescError> {
         if let Some(bdev) = Self::lookup_by_name(name) {
             let mut descriptor = std::ptr::null_mut();
 
@@ -69,16 +72,21 @@ impl Bdev {
             };
 
             return if rc != 0 {
-                None
+                Err(DescError::OpenBdev {
+                    source: Errno::from_i32(rc),
+                })
             } else {
-                Descriptor::from_null_checked(descriptor)
+                Ok(Descriptor::from_null_checked(descriptor).unwrap())
             };
         }
-        None
+
+        Err(DescError::OpenBdev {
+            source: Errno::ENODEV,
+        })
     }
 
     pub fn is_claimed(&self) -> bool {
-        unsafe { (*self.0).internal.claim_module.is_null() }
+        unsafe { !(*self.0).internal.claim_module.is_null() }
     }
 
     /// lookup a bdev by its name

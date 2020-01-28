@@ -23,23 +23,21 @@
 //! channels for all children that are in the open state.
 
 use crate::{
-    bdev::{
-        bdev_lookup_by_name,
-        nexus::{
-            nexus_bdev::{
-                CreateChild,
-                DestroyChild,
-                Error,
-                Nexus,
-                NexusState,
-                OpenChild,
-                ReadLabel,
-            },
-            nexus_channel::DREvent,
-            nexus_child::{ChildState, NexusChild},
-            nexus_label::NexusLabel,
+    bdev::nexus::{
+        nexus_bdev::{
+            CreateChild,
+            DestroyChild,
+            Error,
+            Nexus,
+            NexusState,
+            OpenChild,
+            ReadLabel,
         },
+        nexus_channel::DREvent,
+        nexus_child::{ChildState, NexusChild},
+        nexus_label::NexusLabel,
     },
+    core::Bdev,
     nexus_uri::{bdev_create, bdev_destroy, BdevCreateDestroy},
 };
 use futures::future::join_all;
@@ -58,7 +56,7 @@ impl Nexus {
                 self.children.push(NexusChild::new(
                     c.clone(),
                     self.name.clone(),
-                    bdev_lookup_by_name(c),
+                    Bdev::lookup_by_name(c),
                 ))
             })
             .for_each(drop);
@@ -75,7 +73,7 @@ impl Nexus {
         self.children.push(NexusChild::new(
             uri.to_string(),
             self.name.clone(),
-            bdev_lookup_by_name(&name),
+            Bdev::lookup_by_name(&name),
         ));
 
         self.child_count += 1;
@@ -95,7 +93,7 @@ impl Nexus {
 
         trace!("adding child {} to nexus {}", name, self.name);
 
-        let child_bdev = match bdev_lookup_by_name(&name) {
+        let child_bdev = match Bdev::lookup_by_name(&name) {
             Some(child) => {
                 if child.block_len() != self.bdev.block_len()
                     || self.min_num_blocks() < child.num_blocks()
@@ -271,7 +269,7 @@ impl Nexus {
     pub fn examine_child(&mut self, name: &str) -> bool {
         for mut c in &mut self.children {
             if c.name == name && c.state == ChildState::Init {
-                if let Some(bdev) = bdev_lookup_by_name(name) {
+                if let Some(bdev) = Bdev::lookup_by_name(name) {
                     debug!("{}: Adding child {}", self.name, name);
                     c.bdev = Some(bdev);
                     return true;

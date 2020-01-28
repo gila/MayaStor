@@ -1,4 +1,4 @@
-use std::{fmt::Display, rc::Rc};
+use std::fmt::Display;
 
 use nix::errno::Errno;
 use serde::{export::Formatter, Serialize};
@@ -11,11 +11,9 @@ use spdk_sys::{
 };
 
 use crate::{
-    bdev::{
-        nexus::nexus_label::{GPTHeader, GptEntry, NexusLabel},
-        Bdev,
-    },
-    descriptor::{DescError, Descriptor},
+    bdev::nexus::nexus_label::{GPTHeader, GptEntry, NexusLabel},
+    core::{Bdev, BdevHandle, CoreError, Descriptor},
+    descriptor::DescError,
     dma::{DmaBuf, DmaError},
     nexus_uri::{bdev_destroy, BdevCreateDestroy},
 };
@@ -54,14 +52,16 @@ pub enum ChildError {
     PartitionTableChecksum {},
     #[snafu(display("Opening child bdev without bdev pointer"))]
     OpenWithoutBdev {},
+    #[snafu(display("Failed to create a BdevHandle for child"))]
+    HandleCreate { source: CoreError },
 }
 
 #[derive(Debug, Snafu)]
 pub enum ChildIoError {
     #[snafu(display("Error writing to {}", name))]
-    WriteError { source: DescError, name: String },
+    WriteError { source: CoreError, name: String },
     #[snafu(display("Error reading from {}", name))]
-    ReadError { source: DescError, name: String },
+    ReadError { source: CoreError, name: String },
     #[snafu(display("Invalid descriptor for child bdev {}", name))]
     InvalidDescriptor { name: String },
 }
@@ -107,12 +107,14 @@ pub struct NexusChild {
     #[serde(skip_serializing)]
     /// channel on which we submit the IO
     pub(crate) ch: *mut spdk_io_channel,
+    #[serde(skip_serializing)]
+    pub(crate) desc: Option<Descriptor>,
     /// current state of the child
     pub(crate) state: ChildState,
     pub(crate) repairing: bool,
     /// descriptor obtained after opening a device
     #[serde(skip_serializing)]
-    pub(crate) descriptor: Option<Rc<Descriptor>>,
+    pub(crate) bdev_handle: Option<BdevHandle>,
 }
 
 impl Display for NexusChild {
@@ -149,62 +151,55 @@ impl NexusChild {
             return Err(ChildError::ChildNotClosed {});
         }
 
-        // TODO: I think this should be an assert (= unwrap)
-        if let Some(bdev) = self.bdev.as_ref() {
-            let child_size = bdev.size_in_bytes();
-            if parent_size > child_size {
-                error!(
-                    "{}: child to small parent size: {} child size: {}",
-                    self.name, parent_size, child_size
-                );
-                self.state = ChildState::ConfigInvalid;
-                return Err(ChildError::ChildTooSmall {
-                    parent_size,
-                    child_size,
-                });
-            }
-
-            // used for internal IOs like updating labels
-            let desc = match Descriptor::open(bdev, true) {
-                Ok(desc) => desc,
-                Err(err) => {
-                    self.state = ChildState::Faulted;
-                    return Err(err).context(OpenChild {});
-                }
-            };
-
-            self.descriptor = Some(Rc::new(desc));
-            self.state = ChildState::Open;
-
-            debug!("{}: child {} opened successfully", self.parent, self.name);
-
-            Ok(self.name.clone())
-        } else {
-            Err(ChildError::OpenWithoutBdev {})
+        if self.bdev.is_none() {
+            return Err(ChildError::OpenWithoutBdev {});
         }
+
+        let bdev = self.bdev.as_ref().unwrap();
+
+        let child_size = bdev.size_in_bytes();
+        if parent_size > child_size {
+            error!(
+                "{}: child to small parent size: {} child size: {}",
+                self.name, parent_size, child_size
+            );
+            self.state = ChildState::ConfigInvalid;
+            return Err(ChildError::ChildTooSmall {
+                parent_size,
+                child_size,
+            });
+        }
+
+        self.desc = Some(Bdev::open(&bdev.name(), true).context(OpenChild {})?);
+        self.bdev_handle = Some(
+            BdevHandle::open(&bdev.name(), true, false)
+                .context(HandleCreate {})?,
+        );
+
+        self.state = ChildState::Open;
+
+        debug!("{}: child {} opened successfully", self.parent, self.name);
+
+        Ok(self.name.clone())
     }
 
     /// close the bdev -- we have no means of determining if this succeeds
     pub(crate) fn close(&mut self) -> ChildState {
         trace!("{}: Closing child {}", self.parent, self.name);
 
-        debug!(
-            "{} has {} references to the descriptor",
-            self.parent,
-            Rc::strong_count(self.descriptor.as_ref().unwrap())
-        );
-
         if let Some(bdev) = self.bdev.as_ref() {
             unsafe {
-                if !(*bdev.inner).internal.claim_module.is_null() {
-                    spdk_bdev_module_release_bdev(bdev.inner);
+                if !(*bdev.as_ptr()).internal.claim_module.is_null() {
+                    spdk_bdev_module_release_bdev(bdev.as_ptr());
                 }
             }
         }
 
         // just to be explicit
-        let descriptor = self.descriptor.take();
-        drop(descriptor);
+        let hdl = self.bdev_handle.take();
+        let desc = self.desc.take();
+        drop(hdl);
+        drop(desc);
 
         // we leave the child structure around for when we want reopen it
         self.state = ChildState::Closed;
@@ -214,12 +209,10 @@ impl NexusChild {
     /// Called to get IO channel to this child.
     /// Returns None of the child has not been opened.
     pub(crate) fn get_io_channel(&self) -> Option<*mut spdk_io_channel> {
-        match &self.descriptor {
-            Some(desc) => unsafe {
-                Some(spdk_bdev_get_io_channel(desc.as_ptr()))
-            },
-            None => None,
+        if let Some(ref d) = self.desc {
+            return unsafe { Some(spdk_bdev_get_io_channel(d.as_ptr())) };
         }
+        None
     }
 
     /// create a new nexus child
@@ -228,9 +221,10 @@ impl NexusChild {
             name,
             bdev,
             parent,
+            desc: None,
             ch: std::ptr::null_mut(),
             state: ChildState::Init,
-            descriptor: None,
+            bdev_handle: None,
             repairing: false,
         }
     }
@@ -261,7 +255,7 @@ impl NexusChild {
         }
 
         let bdev = self.bdev.as_ref();
-        let desc = self.descriptor.as_ref();
+        let desc = self.bdev_handle.as_ref();
 
         if bdev.is_none() || desc.is_none() {
             return Err(ChildError::ChildInvalid {});
@@ -341,7 +335,7 @@ impl NexusChild {
         offset: u64,
         buf: &DmaBuf,
     ) -> Result<usize, ChildIoError> {
-        if let Some(desc) = self.descriptor.as_ref() {
+        if let Some(desc) = self.bdev_handle.as_ref() {
             Ok(desc.write_at(offset, buf).await.context(WriteError {
                 name: self.name.clone(),
             })?)
@@ -358,7 +352,7 @@ impl NexusChild {
         offset: u64,
         buf: &mut DmaBuf,
     ) -> Result<usize, ChildIoError> {
-        if let Some(desc) = self.descriptor.as_ref() {
+        if let Some(desc) = self.bdev_handle.as_ref() {
             Ok(desc.read_at(offset, buf).await.context(ReadError {
                 name: self.name.clone(),
             })?)
@@ -371,7 +365,7 @@ impl NexusChild {
 
     /// get a dma buffer that is aligned to this child
     pub fn get_buf(&self, size: usize) -> Option<DmaBuf> {
-        match self.descriptor.as_ref() {
+        match self.bdev_handle.as_ref() {
             Some(descriptor) => match descriptor.dma_malloc(size) {
                 Ok(buf) => Some(buf),
                 Err(..) => None,

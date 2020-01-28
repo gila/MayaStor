@@ -8,12 +8,10 @@ use crate::{
         nexus_channel::DREvent,
         nexus_child::ChildState,
     },
-    descriptor::Descriptor,
     event,
     rebuild::{RebuildState, RebuildTask},
 };
 use snafu::{ResultExt, Snafu};
-use std::rc::Rc;
 
 #[derive(Debug, Snafu)]
 pub enum RebuildError {
@@ -41,7 +39,7 @@ impl Nexus {
     /// find any child that requires a rebuild. Children in the faulted state
     /// are eligible for a rebuild closed children are not and must be
     /// opened first.
-    fn find_rebuild_target(&mut self) -> Option<Rc<Descriptor>> {
+    fn find_rebuild_target(&mut self) -> Option<String> {
         if self.state != NexusState::Degraded {
             trace!(
                 "{}: does not require any rebuild operation as its state: {}",
@@ -58,14 +56,14 @@ impl Nexus {
                     child.name
                 );
                 child.repairing = true;
-                return Some(child.descriptor.as_ref()?.clone());
+                return Some(child.name.clone());
             }
         }
         None
     }
 
     /// find a child which can be used as a rebuild source
-    fn find_rebuild_source(&mut self) -> Option<Rc<Descriptor>> {
+    fn find_rebuild_source(&mut self) -> Option<String> {
         if self.children.len() == 1 {
             trace!("{}: not enough children to initiate rebuild", self.name);
             return None;
@@ -78,7 +76,7 @@ impl Nexus {
                     self.name,
                     child.name
                 );
-                return Some(child.descriptor.as_ref()?.clone());
+                return Some(child.name.clone());
             }
         }
         None

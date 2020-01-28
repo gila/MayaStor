@@ -11,7 +11,6 @@ use crate::{
     bdev::nexus::nexus_module::NEXUS_MODULE,
     core::{channel::IoChannel, Bdev},
 };
-
 /// NewType around a descriptor, only one descriptor is typically available as
 /// a bdev is opened only one time. When the last reference to the descriptor is
 /// dropped, we implicitly close the bdev.
@@ -20,7 +19,6 @@ pub struct Descriptor(*mut spdk_bdev_desc);
 
 impl Drop for Descriptor {
     fn drop(&mut self) {
-        debug!("closing bdev {}", self.get_bdev().name());
         unsafe {
             spdk_bdev_close(self.0);
         }

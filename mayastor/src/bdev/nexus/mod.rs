@@ -9,7 +9,7 @@ use spdk_sys::spdk_bdev_module;
 pub mod nexus_bdev;
 pub mod nexus_bdev_children;
 mod nexus_channel;
-mod nexus_child;
+pub(crate) mod nexus_child;
 mod nexus_config;
 pub mod nexus_fn_table;
 pub mod nexus_io;

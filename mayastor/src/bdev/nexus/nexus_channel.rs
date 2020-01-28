@@ -94,10 +94,10 @@ impl NexusChannelInner {
                     "{}: Getting new channel for child {} desc {:p}",
                     c.parent,
                     c.name,
-                    c.descriptor.as_ref().unwrap().as_ptr()
+                    c.desc.as_ref().unwrap().as_ptr()
                 );
                 self.ch.push((
-                    c.descriptor.as_ref().unwrap().as_ptr(),
+                    c.desc.as_ref().unwrap().as_ptr(),
                     c.get_io_channel().unwrap(),
                 ))
             })
@@ -133,7 +133,7 @@ impl NexusChannel {
             .filter(|c| c.state == ChildState::Open)
             .map(|c| {
                 channels.ch.push((
-                    c.descriptor.as_ref().unwrap().as_ptr(),
+                    c.desc.as_ref().unwrap().as_ptr(),
                     c.get_io_channel().unwrap(),
                 ))
             })
