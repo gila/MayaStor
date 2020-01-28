@@ -9,21 +9,19 @@ use spdk_sys::{
 
 use crate::{
     bdev::nexus::nexus_module::NEXUS_MODULE,
-    core::{channel::IoChannel, Bdev},
+    core::{channel::IoChannel, Bdev, BdevHandle, CoreError},
 };
-/// NewType around a descriptor, only one descriptor is typically available as
-/// a bdev is opened only one time. When the last reference to the descriptor is
-/// dropped, we implicitly close the bdev.
-#[derive(Debug, Clone)]
-pub struct Descriptor(*mut spdk_bdev_desc);
 
-impl Drop for Descriptor {
-    fn drop(&mut self) {
-        unsafe {
-            spdk_bdev_close(self.0);
-        }
-    }
-}
+use serde::export::{fmt::Error, Formatter};
+use std::{convert::TryFrom, fmt::Debug};
+
+/// NewType around a descriptor, multiple descriptor to the same bdev is
+/// allowed. A bdev can me claimed for exclusive write access. Any existing
+/// descriptors that are open before the bdev has been claimed will remain as
+/// is. Typically, the target, exporting the bdev will claim the device. In the
+/// case of the nexus, we do not claim the children for exclusive access to
+/// allow for the rebuild to happen across multiple cores.
+pub struct Descriptor(*mut spdk_bdev_desc);
 
 impl Descriptor {
     /// returns the underling ptr
@@ -68,20 +66,45 @@ impl Descriptor {
         }
     }
 
-    /// Return the bdev associated with this descriptor, a descriptor can not
+    /// Return the bdev associated with this descriptor, a descriptor cannot
     /// exist without a bdev
     pub fn get_bdev(&self) -> Bdev {
         let bdev = unsafe { spdk_bdev_desc_get_bdev(self.0) };
         Bdev::from(bdev)
     }
 
-    /// create a Descriptor from a spdk_bdev_desc pointer this is the only way
-    /// to create a new descriptor
+    /// create a Descriptor from a raw spdk_bdev_desc pointer this is the only
+    /// way to create a new descriptor
     pub fn from_null_checked(desc: *mut spdk_bdev_desc) -> Option<Descriptor> {
         if desc.is_null() {
             None
         } else {
             Some(Descriptor(desc))
         }
+    }
+
+    /// consumes the descriptor and returns a handle
+    pub fn into_handle(self) -> Result<BdevHandle, CoreError> {
+        BdevHandle::try_from(self)
+    }
+}
+
+impl Drop for Descriptor {
+    fn drop(&mut self) {
+        trace!("[D] {:?}", self);
+        unsafe {
+            spdk_bdev_close(self.0);
+        }
+    }
+}
+
+impl Debug for Descriptor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(
+            f,
+            "Descriptor {:p} for bdev: {}",
+            self.as_ptr(),
+            self.get_bdev().name()
+        )
     }
 }

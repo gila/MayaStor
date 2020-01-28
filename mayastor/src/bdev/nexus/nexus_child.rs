@@ -1,15 +1,5 @@
 use std::fmt::Display;
 
-use nix::errno::Errno;
-use serde::{export::Formatter, Serialize};
-use snafu::{ResultExt, Snafu};
-
-use spdk_sys::{
-    spdk_bdev_get_io_channel,
-    spdk_bdev_module_release_bdev,
-    spdk_io_channel,
-};
-
 use crate::{
     bdev::nexus::nexus_label::{GPTHeader, GptEntry, NexusLabel},
     core::{Bdev, BdevHandle, CoreError, Descriptor},
@@ -17,6 +7,11 @@ use crate::{
     dma::{DmaBuf, DmaError},
     nexus_uri::{bdev_destroy, BdevCreateDestroy},
 };
+use nix::errno::Errno;
+use serde::{export::Formatter, Serialize};
+use snafu::{ResultExt, Snafu};
+use spdk_sys::{spdk_bdev_module_release_bdev, spdk_io_channel};
+use std::{convert::TryFrom, sync::Arc};
 
 #[derive(Debug, Snafu)]
 pub enum ChildError {
@@ -108,7 +103,7 @@ pub struct NexusChild {
     /// channel on which we submit the IO
     pub(crate) ch: *mut spdk_io_channel,
     #[serde(skip_serializing)]
-    pub(crate) desc: Option<Descriptor>,
+    pub(crate) desc: Option<Arc<Descriptor>>,
     /// current state of the child
     pub(crate) state: ChildState,
     pub(crate) repairing: bool,
@@ -170,10 +165,12 @@ impl NexusChild {
             });
         }
 
-        self.desc = Some(Bdev::open(&bdev.name(), true).context(OpenChild {})?);
+        self.desc = Some(Arc::new(
+            Bdev::open_by_name(&bdev.name(), true).context(OpenChild {})?,
+        ));
+
         self.bdev_handle = Some(
-            BdevHandle::open(&bdev.name(), true, false)
-                .context(HandleCreate {})?,
+            BdevHandle::try_from(self.desc.as_ref().unwrap().clone()).unwrap(),
         );
 
         self.state = ChildState::Open;
@@ -181,6 +178,17 @@ impl NexusChild {
         debug!("{}: child {} opened successfully", self.parent, self.name);
 
         Ok(self.name.clone())
+    }
+
+    /// return a descriptor to this child
+    pub fn get_descriptor(&self) -> Result<Arc<Descriptor>, CoreError> {
+        if let Some(ref d) = self.desc {
+            Ok(d.clone())
+        } else {
+            Err(CoreError::InvalidDescriptor {
+                name: self.name.clone(),
+            })
+        }
     }
 
     /// close the bdev -- we have no means of determining if this succeeds
@@ -204,15 +212,6 @@ impl NexusChild {
         // we leave the child structure around for when we want reopen it
         self.state = ChildState::Closed;
         self.state
-    }
-
-    /// Called to get IO channel to this child.
-    /// Returns None of the child has not been opened.
-    pub(crate) fn get_io_channel(&self) -> Option<*mut spdk_io_channel> {
-        if let Some(ref d) = self.desc {
-            return unsafe { Some(spdk_bdev_get_io_channel(d.as_ptr())) };
-        }
-        None
     }
 
     /// create a new nexus child

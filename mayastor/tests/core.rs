@@ -76,7 +76,7 @@ async fn works() -> TestResult {
     let b = Bdev::lookup_by_name("core_nexus").unwrap();
     assert_eq!(b.name(), "core_nexus");
 
-    let desc = Bdev::open("core_nexus", false).unwrap();
+    let desc = Bdev::open_by_name("core_nexus", false).unwrap();
     let channel = desc.get_channel().expect("failed to get IO channel");
     drop(channel);
     drop(desc);
@@ -91,9 +91,9 @@ async fn multiple_open() -> TestResult {
 
     let n = nexus_lookup("core_nexus").expect("failed to lookup nexus");
 
-    let d1 = Bdev::open("core_nexus", true)
+    let d1 = Bdev::open_by_name("core_nexus", true)
         .expect("failed to open first desc to nexus");
-    let d2 = Bdev::open("core_nexus", true)
+    let d2 = Bdev::open_by_name("core_nexus", true)
         .expect("failed to open second desc to nexus");
 
     let ch1 = d1.get_channel().expect("failed to get channel!");

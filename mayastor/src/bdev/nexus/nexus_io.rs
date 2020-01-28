@@ -88,12 +88,12 @@ impl Bio {
     pub(crate) fn ok(&mut self) {
         if cfg!(debug_assertions) {
             // have a child IO that has failed
-            if self.io_ctx_as_mut_ref().status < 0 {
+            if self.ctx_as_mut_ref().status < 0 {
                 debug!("BIO for nexus {} failed", self.nexus_as_ref().name)
             }
             // we are marking the IO done but not all child IOs have returned,
             // regardless of their state at this point
-            if self.io_ctx_as_mut_ref().in_flight != 0 {
+            if self.ctx_as_mut_ref().in_flight != 0 {
                 debug!("BIO for nexus marked completed but has outstanding")
             }
         }
@@ -108,15 +108,15 @@ impl Bio {
 
     /// asses the IO if we need to mark it failed or ok.
     #[inline]
-    pub(crate) fn asses(&mut self) {
-        self.io_ctx_as_mut_ref().in_flight -= 1;
+    pub(crate) fn assess(&mut self) {
+        self.ctx_as_mut_ref().in_flight -= 1;
 
         if cfg!(debug_assertions) {
-            assert_ne!(self.io_ctx_as_mut_ref().in_flight, -1);
+            assert_ne!(self.ctx_as_mut_ref().in_flight, -1);
         }
 
-        if self.io_ctx_as_mut_ref().in_flight == 0 {
-            if self.io_ctx_as_mut_ref().status < io_status::PENDING {
+        if self.ctx_as_mut_ref().in_flight == 0 {
+            if self.ctx_as_mut_ref().status < io_status::PENDING {
                 trace!("failing parent IO {:p} ({})", self.0, unsafe {
                     (*self.0).type_
                 });
@@ -137,7 +137,7 @@ impl Bio {
     /// get the context of the given IO, which is used to determine the overall
     /// state of the IO.
     #[inline]
-    pub(crate) fn io_ctx_as_mut_ref(&mut self) -> &mut NioCtx {
+    pub(crate) fn ctx_as_mut_ref(&mut self) -> &mut NioCtx {
         unsafe {
             &mut *((*self.0).driver_ctx.as_mut_ptr() as *const c_void
                 as *mut NioCtx)

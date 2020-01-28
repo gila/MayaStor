@@ -622,9 +622,9 @@ impl Nexus {
                 pio
             );
 
-            pio.io_ctx_as_mut_ref().status = io_status::FAILED;
+            pio.ctx_as_mut_ref().status = io_status::FAILED;
         }
-        pio.asses();
+        pio.assess();
         // always free the child IO
         Bio::io_free(child_io);
     }
@@ -642,7 +642,7 @@ impl Nexus {
         }
 
         let ch = NexusChannel::inner_from_channel(ch);
-        let (desc, ch) = ch.ch[ch.previous];
+        let (desc, ch) = ch.ch[ch.previous].io_tuple();
         let ret = Self::readv_impl(io, desc, ch);
         if ret != 0 {
             let bio = Bio(io);
@@ -661,7 +661,7 @@ impl Nexus {
 
         // we use RR to read from the children also, set that we only need
         // to read from one child before we complete the IO to the callee.
-        io.io_ctx_as_mut_ref().in_flight = 1;
+        io.ctx_as_mut_ref().in_flight = 1;
 
         let child = channels.child_select();
 
@@ -678,7 +678,7 @@ impl Nexus {
             return;
         }
 
-        let (desc, ch) = channels.ch[child];
+        let (desc, ch) = channels.ch[child].io_tuple();
 
         let ret = Self::readv_impl(pio, desc, ch);
 
@@ -723,14 +723,15 @@ impl Nexus {
     ) {
         let mut io = Bio(pio);
         // in case of writes, we want to write to all underlying children
-        io.io_ctx_as_mut_ref().in_flight = channels.ch.len() as i8;
+        io.ctx_as_mut_ref().in_flight = channels.ch.len() as i8;
         let results = channels
             .ch
             .iter()
             .map(|c| unsafe {
+                let (b, c) = c.io_tuple();
                 spdk_bdev_writev_blocks(
-                    c.0,
-                    c.1,
+                    b,
+                    c,
                     io.iovs(),
                     io.iov_count(),
                     io.offset() + io.nexus_as_ref().data_ent_offset,
@@ -757,14 +758,15 @@ impl Nexus {
         channels: &NexusChannelInner,
     ) {
         let mut io = Bio(pio);
-        io.io_ctx_as_mut_ref().in_flight = channels.ch.len() as i8;
+        io.ctx_as_mut_ref().in_flight = channels.ch.len() as i8;
         let results = channels
             .ch
             .iter()
             .map(|c| unsafe {
+                let (b, c) = c.io_tuple();
                 spdk_bdev_unmap_blocks(
-                    c.0,
-                    c.1,
+                    b,
+                    c,
                     io.offset() + io.nexus_as_ref().data_ent_offset,
                     io.num_blocks(),
                     Some(Self::io_completion),

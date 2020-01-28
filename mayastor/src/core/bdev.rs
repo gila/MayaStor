@@ -4,24 +4,31 @@ use std::{
     os::raw::c_void,
 };
 
+use futures::channel::oneshot;
+use nix::errno::Errno;
+
 use spdk_sys::{
     spdk_bdev,
     spdk_bdev_get_aliases,
     spdk_bdev_get_block_size,
     spdk_bdev_get_by_name,
+    spdk_bdev_get_device_stat,
     spdk_bdev_get_name,
     spdk_bdev_get_num_blocks,
     spdk_bdev_get_product_name,
     spdk_bdev_get_uuid,
+    spdk_bdev_io_stat,
     spdk_bdev_io_type_supported,
     spdk_bdev_open,
     spdk_uuid_generate,
 };
 
-use crate::core::{uuid::Uuid, Descriptor};
+use crate::{
+    bdev::Stat,
+    core::{uuid::Uuid, Descriptor},
+};
 // XXX FIX THIS
-use crate::descriptor::DescError;
-use nix::errno::Errno;
+use crate::{descriptor::DescError, executor::cb_arg};
 
 /// Newtype structure that represents a block device. The soundness of the API
 /// is based on the fact that opening and finding of a bdev, returns a valid
@@ -55,34 +62,42 @@ impl Bdev {
         let bdev = Bdev(ctx as *mut _);
         debug!("called hot remove cb for nexus {:?}", bdev);
     }
-    /// open a bdev by its name in read_write mode. If a bdev is claimed, it can
-    /// be opened for write only once.
-    pub fn open(name: &str, read_write: bool) -> Result<Descriptor, DescError> {
+
+    /// open a bdev by its name in read_write mode.
+    pub fn open_by_name(
+        name: &str,
+        read_write: bool,
+    ) -> Result<Descriptor, DescError> {
         if let Some(bdev) = Self::lookup_by_name(name) {
-            let mut descriptor = std::ptr::null_mut();
-
-            let rc = unsafe {
-                spdk_bdev_open(
-                    bdev.as_ptr(),
-                    read_write,
-                    Some(Self::hot_remove),
-                    bdev.as_ptr() as *mut _,
-                    &mut descriptor,
-                )
-            };
-
-            return if rc != 0 {
-                Err(DescError::OpenBdev {
-                    source: Errno::from_i32(rc),
-                })
-            } else {
-                Ok(Descriptor::from_null_checked(descriptor).unwrap())
-            };
+            bdev.open(read_write)
+        } else {
+            Err(DescError::OpenBdev {
+                source: Errno::ENODEV,
+            })
         }
+    }
 
-        Err(DescError::OpenBdev {
-            source: Errno::ENODEV,
-        })
+    /// open the current bdev, the bdev can be opened multiple times resulting
+    /// in a new descriptor for each call.
+    pub fn open(&self, read_write: bool) -> Result<Descriptor, DescError> {
+        let mut descriptor = std::ptr::null_mut();
+        let rc = unsafe {
+            spdk_bdev_open(
+                self.as_ptr(),
+                read_write,
+                Some(Self::hot_remove),
+                self.as_ptr() as *mut _,
+                &mut descriptor,
+            )
+        };
+
+        if rc != 0 {
+            Err(DescError::OpenBdev {
+                source: Errno::from_i32(rc),
+            })
+        } else {
+            Ok(Descriptor::from_null_checked(descriptor).unwrap())
+        }
     }
 
     pub fn is_claimed(&self) -> bool {
@@ -229,5 +244,45 @@ impl Bdev {
         }
         unsafe { spdk_uuid_generate(&mut (*self.0).uuid) };
         info!("No or invalid v4 UUID specified, using self generated one");
+    }
+
+    extern "C" fn stat_cb(
+        _bdev: *mut spdk_bdev,
+        _stat: *mut spdk_bdev_io_stat,
+        sender_ptr: *mut c_void,
+        errno: i32,
+    ) {
+        let sender =
+            unsafe { Box::from_raw(sender_ptr as *mut oneshot::Sender<i32>) };
+        sender.send(errno).expect("stat_cb receiver is gone");
+    }
+
+    /// Get bdev stats or errno value in case of an error.
+    pub async fn stats(&self) -> Result<Stat, i32> {
+        let mut stat: spdk_bdev_io_stat = Default::default();
+        let (sender, receiver) = oneshot::channel::<i32>();
+
+        // this will iterate over io channels and call async cb when done
+        unsafe {
+            spdk_bdev_get_device_stat(
+                self.as_ptr(),
+                &mut stat as *mut _,
+                Some(Self::stat_cb),
+                cb_arg(sender),
+            );
+        }
+
+        let errno = receiver.await.expect("Cancellation is not supported");
+        if errno != 0 {
+            Err(errno)
+        } else {
+            // stat is populated with the stats by now
+            Ok(Stat {
+                num_read_ops: stat.num_read_ops,
+                num_write_ops: stat.num_write_ops,
+                bytes_read: stat.bytes_read,
+                bytes_written: stat.bytes_written,
+            })
+        }
     }
 }
