@@ -46,7 +46,7 @@ use spdk_sys::{
 };
 
 use crate::{
-    core::event::Mthread,
+    core::{event::Mthread, MEM_POOL, REACTOR_LIST},
     delay,
     executor,
     logger,
@@ -55,6 +55,7 @@ use crate::{
     target,
 };
 use byte_unit::{Byte, ByteUnit};
+use std::time::Duration;
 use structopt::StructOpt;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
@@ -625,61 +626,70 @@ impl MayastorEnvironment {
         });
 
         self.install_signal_handlers()?;
-        self.init_main_thread()?;
+        //self.init_main_thread()?;
 
         // init the subsystems and RPC server, this must be done in context of
         // the "stack less" threads.
-        if let Some(mt) = INIT_THREAD.get() {
-            mt.with(|| unsafe {
-                // all futures will be executed from the management thread
-                // (mm_thread)
-                executor::start();
-
-                let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
-
-                if let Some(ref json) = self.json_config_file {
-                    info!("Loading JSON configuration file");
-
-                    let jsonfile = CString::new(json.as_str()).unwrap();
-                    spdk_app_json_config_load(
-                        jsonfile.as_ptr(),
-                        rpc.as_ptr(),
-                        Some(Self::start_rpc),
-                        rpc.into_raw() as _,
-                    );
-                } else {
-                    spdk_subsystem_init(
-                        Some(Self::start_rpc),
-                        rpc.into_raw() as _,
-                    );
-                }
-
-                if let Some(_key) = env::var_os("MAYASTOR_DELAY") {
-                    delay::register();
-                }
-            });
-        }
-
-        pool::register_pool_methods();
-        replica::register_replica_methods();
-
-        if let Some(mt) = INIT_THREAD.get() {
-            mt.with(|| {
-                f();
-            });
-        }
+        //        if let Some(mt) = INIT_THREAD.get() {
+        //            mt.with(|| unsafe {
+        //                // all futures will be executed from the management
+        // thread                // (mm_thread)
+        //                executor::start();
+        //
+        //                let rpc =
+        // CString::new(self.rpc_addr.as_str()).unwrap();
+        //
+        //                if let Some(ref json) = self.json_config_file {
+        //                    info!("Loading JSON configuration file");
+        //
+        //                    let jsonfile =
+        // CString::new(json.as_str()).unwrap();
+        // spdk_app_json_config_load(
+        // jsonfile.as_ptr(),                        rpc.as_ptr(),
+        //                        Some(Self::start_rpc),
+        //                        rpc.into_raw() as _,
+        //                    );
+        //                } else {
+        //                    spdk_subsystem_init(
+        //                        Some(Self::start_rpc),
+        //                        rpc.into_raw() as _,
+        //                    );
+        //                }
+        //
+        //                if let Some(_key) = env::var_os("MAYASTOR_DELAY") {
+        //                    delay::register();
+        //                }
+        //            });
+        //        }
+        //
+        //        pool::register_pool_methods();
+        //        replica::register_replica_methods();
+        //
+        //        if let Some(mt) = INIT_THREAD.get() {
+        //            mt.with(|| {
+        //                f();
+        //            });
+        //        }
 
         unsafe {
-            // will block the main thread until we exit
-            spdk_reactors_start();
+            crate::core::reactor::reactors_init();
+        };
+        // dbg!(MEM_POOL.get());
+        // dbg!(REACTOR_LIST.get());
+        //        unsafe {
+        //            // will block the main thread until we exit
+        //            spdk_reactors_start();
+        //
+        //            info!("Finalizing Mayastor shutdown...");
+        //            delay::unregister();
+        //            spdk_reactors_fini();
+        //            spdk_env_fini();
+        //            spdk_log_close();
+        //        }
 
-            info!("Finalizing Mayastor shutdown...");
-            delay::unregister();
-            spdk_reactors_fini();
-            spdk_env_fini();
-            spdk_log_close();
-        }
+        crate::core::reactor::reactors_start();
 
+        std::thread::sleep(Duration::from_secs(5));
         // return the global rc value
         Ok(*GLOBAL_RC.lock().unwrap())
     }

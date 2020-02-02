@@ -29,7 +29,7 @@ pub type EventFn = extern "C" fn(*mut c_void, *mut c_void);
 /// should not be confused with an actual thread. Consider it more to be
 /// analogous to a container to which you can submit work and poll it to drive
 /// the submitted work to completion.
-pub struct Mthread(*mut spdk_thread);
+pub struct Mthread(pub *mut spdk_thread);
 
 unsafe impl Send for Mthread {}
 unsafe impl Sync for Mthread {}

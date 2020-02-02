@@ -2,21 +2,25 @@
 //! core contains the primary abstractions around the SPDK primitives.
 mod bdev;
 mod channel;
+mod cpu_cores;
 mod descriptor;
 mod dma;
 mod env;
 mod handle;
+mod reactor;
 mod uuid;
 
 pub mod event;
 pub use ::uuid::Uuid;
 pub use bdev::Bdev;
 pub use channel::IoChannel;
+pub use cpu_cores::{Core, Cores};
 pub use descriptor::Descriptor;
 pub use dma::{DmaBuf, DmaError};
 pub use env::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment};
 pub use handle::BdevHandle;
 use nix::errno::Errno;
+pub use reactor::{MEM_POOL, REACTOR_LIST};
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
