@@ -14,8 +14,6 @@ pub enum Core {
     Last,
 }
 
-
-
 pub struct Cores(u32);
 
 impl Cores {

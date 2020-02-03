@@ -9,6 +9,7 @@ use std::{
 use futures::{
     executor::{LocalPool, LocalSpawner},
     task::LocalSpawnExt,
+    Future,
 };
 use log::info;
 use once_cell::sync::OnceCell;
@@ -48,7 +49,7 @@ use crate::{
 use std::cell::{Ref, RefCell};
 
 #[derive(Debug)]
-pub struct ReactorList(Vec<Reactor>);
+pub struct Reactors(Vec<Reactor>);
 
 // XXX likely its a good idea to not bindgen these and spell them out ourselves
 // to avoid the ducktyping
@@ -85,15 +86,15 @@ pub struct MemPool(*mut spdk_mempool);
 unsafe impl Sync for MemPool {}
 unsafe impl Send for MemPool {}
 
-unsafe impl Sync for ReactorList {}
-unsafe impl Send for ReactorList {}
+unsafe impl Sync for Reactors {}
+unsafe impl Send for Reactors {}
 
-pub static REACTOR_LIST: OnceCell<ReactorList> = OnceCell::new();
+pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
 pub static MEM_POOL: OnceCell<MemPool> = OnceCell::new();
 
 #[repr(C, align(64))]
 #[derive(Debug)]
-pub struct Reactor {
+struct Reactor {
     threads: Vec<Mthread>,
     lcore: u32,
     flags: u32,
@@ -101,8 +102,43 @@ pub struct Reactor {
     pool: RefCell<LocalPool>,
 }
 
-pub fn get_reactor(core: u32) -> Option<&'static Reactor> {
-    REACTOR_LIST.get().unwrap().0.get(core as usize)
+impl Reactors {
+    pub fn init() {
+        let pool_name = format!("evtpool_{}", unsafe { libc::getpid() });
+        let pool_name = CString::new(pool_name).unwrap();
+
+        let _ = MEM_POOL.get_or_init(|| {
+            let mem_pool = unsafe {
+                spdk_mempool_create(
+                    pool_name.into_raw(),
+                    262144 - 1,
+                    std::mem::size_of::<spdk_event>(),
+                    SPDK_MEMPOOL_DEFAULT_CACHE_SIZE as usize,
+                    SPDK_ENV_SOCKET_ID_ANY,
+                )
+            };
+
+            if mem_pool.is_null() {
+                panic!("failed to allocate mem pool, cannot continue");
+            }
+            // dbg!(&mem_pool);
+            MemPool(mem_pool)
+        });
+
+        let rc = unsafe { spdk_thread_lib_init(None, 0) };
+
+        assert_eq!(rc, 0);
+
+        let reactors = Cores::count()
+            .into_iter()
+            .map(|c| {
+                info!("init core: {}", c);
+                Reactor::new(c)
+            })
+            .collect::<Vec<_>>();
+
+        REACTOR_LIST.set(Reactors(reactors)).unwrap();
+    }
 }
 
 impl Reactor {
@@ -133,6 +169,29 @@ impl Reactor {
         }
     }
 
+    fn get(core: u32) -> Option<&'static Reactor> {
+        REACTOR_LIST.get().unwrap().0.get(core as usize)
+    }
+
+    fn at_core(core: u32) -> Option<&'static Reactor> {
+        REACTOR_LIST
+            .get()
+            .unwrap()
+            .0
+            .iter()
+            .find(|r| r.lcore == core)
+    }
+
+    pub fn spawn<F: Future<Output = ()> + 'static>(core: u32, f: F) {
+        Self::get(core)
+            .unwrap()
+            .pool
+            .borrow()
+            .spawner()
+            .spawn_local(f)
+            .unwrap();
+    }
+
     pub fn run_futures(&self) {
         self.pool.borrow_mut().run_until_stalled();
     }
@@ -142,45 +201,6 @@ impl Drop for Reactor {
     fn drop(&mut self) {
         unsafe { spdk_ring_free(*self.events) }
     }
-}
-
-pub unsafe fn reactors_init() {
-    // first we need to allocate a mempool that holds a pool of events such that
-    // we can grab these events from the pool as fast as we can.
-    let pool_name = format!("evtpool_{}", libc::getpid());
-    let pool_name = CString::new(pool_name).unwrap();
-
-    let _ = MEM_POOL.get_or_init(|| {
-        let mem_pool = spdk_mempool_create(
-            pool_name.into_raw(),
-            262144 - 1,
-            std::mem::size_of::<spdk_event>(),
-            SPDK_MEMPOOL_DEFAULT_CACHE_SIZE as usize,
-            SPDK_ENV_SOCKET_ID_ANY,
-        );
-
-        if mem_pool.is_null() {
-            panic!("failed to allocate mem pool, cannot continue");
-        }
-        // dbg!(&mem_pool);
-        MemPool(mem_pool)
-    });
-
-    let rc = unsafe { spdk_thread_lib_init(None, 0) };
-
-    assert_eq!(rc, 0);
-
-    let reactors = Cores::count()
-        .into_iter()
-        .map(|c| {
-            info!("init core: {}", c);
-            Reactor::new(c)
-        })
-        .collect::<Vec<_>>();
-
-    REACTOR_LIST.set(ReactorList(reactors)).unwrap();
-
-    // dbg!(REACTOR_LIST.get());
 }
 
 pub fn get_event() -> &'static mut cb_event {
@@ -202,8 +222,6 @@ extern "C" fn hello_jan(arg1: *mut c_void, arg2: *mut c_void) {
 }
 
 pub extern "C" fn reactor_poll(core: *mut c_void) -> i32 {
-    // install executor
-
     let core = core as u32;
 
     dbg!("polling core {}", core);
@@ -279,30 +297,15 @@ pub fn reactors_start() {
             .unwrap();
     });
 
-    REACTOR_LIST
-        .get()
-        .unwrap()
-        .0
-        .iter()
-        .filter(|r| r.lcore == 3)
-        .for_each(|r| {
-            let p = r.pool.borrow_mut();
-            p.spawner()
-                .spawn_local(async {
-                    async {
-                        unsafe {
-                            spdk_subsystem_init(None, std::ptr::null_mut());
-                            spdk_rpc_initialize(
-                                "/var/tmp/spdk.sock\0".as_ptr() as *mut _,
-                            );
-                            spdk_rpc_set_state(SPDK_RPC_RUNTIME);
-                        }
-                        dbg!(target::nvmf::init("127.0.0.1".into())
-                            .await
-                            .unwrap());
-                    }
-                    .await;
-                })
-                .unwrap();
-        });
+    let _r = Reactor::spawn(3, async {
+        async {
+            unsafe {
+                spdk_subsystem_init(None, std::ptr::null_mut());
+                spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
+                spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+            }
+            dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
+        }
+        .await;
+    });
 }

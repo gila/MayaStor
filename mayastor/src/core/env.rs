@@ -673,7 +673,7 @@ impl MayastorEnvironment {
         //        }
 
         unsafe {
-            crate::core::reactor::reactors_init();
+            crate::core::reactor::Reactors::init();
         };
         // dbg!(MEM_POOL.get());
         // dbg!(REACTOR_LIST.get());
