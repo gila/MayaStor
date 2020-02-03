@@ -297,6 +297,7 @@ extern "C" fn mayastor_signal_handler(signo: i32) {
     warn!("Received SIGNO: {}", signo);
     // we don't differentiate between signal numbers for now, all signals will
     // cause a shutdown
+    std::process::exit(1);
     mayastor_env_stop(signo);
 }
 
@@ -689,7 +690,7 @@ impl MayastorEnvironment {
 
         crate::core::reactor::reactors_start();
 
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_secs(1000));
         // return the global rc value
         Ok(*GLOBAL_RC.lock().unwrap())
     }

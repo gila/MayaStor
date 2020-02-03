@@ -26,6 +26,7 @@ use spdk_sys::{
     spdk_ring_dequeue,
     spdk_ring_enqueue,
     spdk_ring_free,
+    spdk_rpc_set_state,
     spdk_thread_create,
     spdk_thread_lib_init,
     spdk_thread_poll,
@@ -33,10 +34,15 @@ use spdk_sys::{
     SPDK_ENV_SOCKET_ID_ANY,
     SPDK_MEMPOOL_DEFAULT_CACHE_SIZE,
     SPDK_RING_TYPE_MP_SC,
+    SPDK_RPC_RUNTIME,
 };
 
 use crate::{
-    core::{event::Mthread, Cores},
+    core::{
+        env::{spdk_rpc_initialize, spdk_subsystem_init},
+        event::Mthread,
+        Cores,
+    },
     target,
 };
 use std::cell::{Ref, RefCell};
@@ -95,6 +101,10 @@ pub struct Reactor {
     pool: RefCell<LocalPool>,
 }
 
+pub fn get_reactor(core: u32) -> Option<&'static Reactor> {
+    REACTOR_LIST.get().unwrap().0.get(core as usize)
+}
+
 impl Reactor {
     fn new(core: u32) -> Self {
         let r = unsafe {
@@ -123,7 +133,7 @@ impl Reactor {
         }
     }
 
-    pub fn run_futures(&mut self) {
+    pub fn run_futures(&self) {
         self.pool.borrow_mut().run_until_stalled();
     }
 }
@@ -201,7 +211,8 @@ pub extern "C" fn reactor_poll(core: *mut c_void) -> i32 {
     let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
 
     loop {
-        let mut reactor = REACTOR_LIST.get().unwrap().0[core as usize].borrow();
+        let reactor = REACTOR_LIST.get().unwrap().0[core as usize].borrow();
+
         let count =
             unsafe { spdk_ring_dequeue(**&reactor.events, &mut events[0], 8) };
 
@@ -209,23 +220,23 @@ pub extern "C" fn reactor_poll(core: *mut c_void) -> i32 {
             // adaptive polling
             info!("no events in this reactor");
             std::thread::sleep(Duration::from_secs(2));
-            return 0;
         }
 
-        events.iter().take(count).for_each(|e| {
-            let event = unsafe { &mut *(e as *const _ as *mut cb_event) };
-            (event.func)(event.arg1, event.arg2);
+        reactor.threads[0].with(|| {
+            events.iter().take(count).for_each(|e| {
+                let event = unsafe { &mut *(e as *const _ as *mut cb_event) };
+                (event.func)(event.arg1, event.arg2);
+            });
+            reactor.run_futures();
         });
 
         unsafe {
             spdk_mempool_put_bulk(MEM_POOL.get().unwrap().0, &mut events[0], 8)
         }
 
-        reactor.threads.iter().for_each(|t| unsafe {
+        reactor.threads.iter().skip(1).for_each(|t| unsafe {
             spdk_thread_poll(t.0, 0, 0);
         });
-
-        reactor.pool.borrow_mut().run_until_stalled();
     }
     0
 }
@@ -237,22 +248,6 @@ async fn my_async() {
 }
 
 pub fn reactors_start() {
-    Cores::count().into_iter().skip(1).for_each(|c| {
-        // inject an event into the queue
-        let reactor = REACTOR_LIST.get().unwrap().0[c as usize].borrow();
-
-        let e = get_event();
-        e.arg1 = std::ptr::null_mut();
-        e.arg2 = std::ptr::null_mut();
-        e.func = hello_jan;
-
-        let e = e as *const _ as *mut c_void as *mut *mut c_void;
-
-        unsafe {
-            spdk_ring_enqueue(*reactor.events, e, 1, std::ptr::null_mut())
-        };
-    });
-
     Cores::count().into_iter().skip(1).for_each(|c| {
         let rc = unsafe {
             spdk_env_thread_launch_pinned(
@@ -277,9 +272,11 @@ pub fn reactors_start() {
 
     REACTOR_LIST.get().unwrap().0.iter().for_each(|r| {
         let p = r.pool.borrow_mut();
-        p.spawner().spawn_local(async {
-            my_async().await;
-        });
+        p.spawner()
+            .spawn_local(async {
+                my_async().await;
+            })
+            .unwrap();
     });
 
     REACTOR_LIST
@@ -290,8 +287,22 @@ pub fn reactors_start() {
         .filter(|r| r.lcore == 3)
         .for_each(|r| {
             let p = r.pool.borrow_mut();
-            p.spawner().spawn_local(async {
-                target::nvmf::init("127.0.0.1".into()).await;
-            });
+            p.spawner()
+                .spawn_local(async {
+                    async {
+                        unsafe {
+                            spdk_subsystem_init(None, std::ptr::null_mut());
+                            spdk_rpc_initialize(
+                                "/var/tmp/spdk.sock\0".as_ptr() as *mut _,
+                            );
+                            spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+                        }
+                        dbg!(target::nvmf::init("127.0.0.1".into())
+                            .await
+                            .unwrap());
+                    }
+                    .await;
+                })
+                .unwrap();
         });
 }
