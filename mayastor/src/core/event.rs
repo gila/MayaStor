@@ -62,6 +62,20 @@ impl Mthread {
         self
     }
 
+    pub fn poll(&self) -> usize {
+        let mut done = false;
+        let mut work = 0;
+
+        while !done {
+            let rc = unsafe { spdk_thread_poll(self.0, 0, 0) };
+            if rc < 1 {
+                done = true
+            }
+            work += rc;
+        }
+        work as usize
+    }
+
     pub fn inner(self) -> *const spdk_thread {
         self.0
     }

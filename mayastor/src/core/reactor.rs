@@ -46,10 +46,10 @@ use crate::{
     },
     target,
 };
-use std::cell::{Ref, RefCell};
+use std::{cell::RefCell, slice::Iter};
 
 #[derive(Debug)]
-pub struct Reactors(Vec<Reactor>);
+pub struct Reactors(pub Vec<Reactor>);
 
 // XXX likely its a good idea to not bindgen these and spell them out ourselves
 // to avoid the ducktyping
@@ -94,7 +94,7 @@ pub static MEM_POOL: OnceCell<MemPool> = OnceCell::new();
 
 #[repr(C, align(64))]
 #[derive(Debug)]
-struct Reactor {
+pub struct Reactor {
     threads: Vec<Mthread>,
     lcore: u32,
     flags: u32,
@@ -139,6 +139,46 @@ impl Reactors {
 
         REACTOR_LIST.set(Reactors(reactors)).unwrap();
     }
+
+    pub fn start() {
+        Cores::count().into_iter().skip(1).for_each(|c| {
+            let rc = unsafe {
+                spdk_env_thread_launch_pinned(
+                    c,
+                    Some(Reactor::poll),
+                    c as *const u32 as *mut c_void,
+                )
+            };
+
+            assert_eq!(rc, 0)
+        });
+    }
+
+    pub fn spawn<F: Future<Output = ()> + 'static>(core: u32, f: F) {
+        if let Some(c) = REACTOR_LIST
+            .get()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.lcore == core)
+        {
+            c.pool.borrow().spawner().spawn_local(f).unwrap();
+        } else {
+            panic!("no such core")
+        }
+    }
+
+    pub fn iter() -> Iter<'static, Reactor> {
+        REACTOR_LIST.get().unwrap().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Reactors {
+    type Item = &'a Reactor;
+    type IntoIter = ::std::slice::Iter<'a, Reactor>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
 }
 
 impl Reactor {
@@ -169,31 +209,105 @@ impl Reactor {
         }
     }
 
-    fn get(core: u32) -> Option<&'static Reactor> {
-        REACTOR_LIST.get().unwrap().0.get(core as usize)
-    }
-
-    fn at_core(core: u32) -> Option<&'static Reactor> {
-        REACTOR_LIST
-            .get()
-            .unwrap()
-            .0
-            .iter()
-            .find(|r| r.lcore == core)
-    }
-
-    pub fn spawn<F: Future<Output = ()> + 'static>(core: u32, f: F) {
-        Self::get(core)
-            .unwrap()
-            .pool
-            .borrow()
-            .spawner()
-            .spawn_local(f)
-            .unwrap();
-    }
-
     pub fn run_futures(&self) {
         self.pool.borrow_mut().run_until_stalled();
+    }
+
+    extern "C" fn poll(core: *mut c_void) -> i32 {
+        if let Some(r) = REACTOR_LIST
+            .get()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.lcore == core as u32)
+        {
+            loop {
+                r.poll_once(core as u32);
+            }
+        }
+        0
+    }
+
+    //    fn poll_once(core: u32) -> usize {
+    //        let core = core as u32;
+    //
+    //        dbg!("polling core {}", core);
+    //
+    //        let mut work = 0;
+    //
+    //        let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
+    //        let reactor = REACTOR_LIST.get().unwrap().0[core as
+    // usize].borrow();
+    //
+    //        let count =
+    //            unsafe { spdk_ring_dequeue(**&reactor.events, &mut events[0],
+    // 8) };
+    //
+    //        if count != 0 {
+    //            // adaptive polling
+    //            info!("events in this reactor");
+    //            std::thread::sleep(Duration::from_secs(2));
+    //
+    //            reactor.threads[0].with(|| {
+    //                events.iter().take(count).for_each(|e| {
+    //                    let event =
+    //                        unsafe { &mut *(e as *const _ as *mut cb_event) };
+    //                    (event.func)(event.arg1, event.arg2);
+    //                });
+    //                reactor.run_futures();
+    //            });
+    //
+    //            unsafe {
+    //                spdk_mempool_put_bulk(
+    //                    MEM_POOL.get().unwrap().0,
+    //                    &mut events[0],
+    //                    8,
+    //                )
+    //            }
+    //
+    //            work = 1
+    //        }
+    //
+    //        // if there was work in the main reactor message pool, we have
+    // already        // polled thread 0 as we need its context, there for
+    // skip it.        reactor.threads.iter().skip(work).for_each(|t| {
+    //            work += t.poll();
+    //        });
+    //
+    //        work
+    //    }
+
+    pub fn poll_once(&self) -> i32 {
+        let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
+        let mut work = 0;
+        let count =
+            unsafe { spdk_ring_dequeue(*self.events, &mut events[0], 8) };
+
+        if count != 0 {
+            self.threads[0].with(|| {
+                events.iter().take(count).for_each(|e| {
+                    let event =
+                        unsafe { &mut *(e as *const _ as *mut cb_event) };
+                    (event.func)(event.arg1, event.arg2);
+                });
+                self.run_futures();
+            });
+
+            unsafe {
+                spdk_mempool_put_bulk(
+                    MEM_POOL.get().unwrap().0,
+                    &mut events[0],
+                    8,
+                )
+            }
+
+            work = 1;
+        }
+
+        self.threads.iter().skip(work).for_each(|t| {
+            work += t.poll();
+        });
+
+        work as i32
     }
 }
 
@@ -221,44 +335,6 @@ extern "C" fn hello_jan(arg1: *mut c_void, arg2: *mut c_void) {
     });
 }
 
-pub extern "C" fn reactor_poll(core: *mut c_void) -> i32 {
-    let core = core as u32;
-
-    dbg!("polling core {}", core);
-
-    let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
-
-    loop {
-        let reactor = REACTOR_LIST.get().unwrap().0[core as usize].borrow();
-
-        let count =
-            unsafe { spdk_ring_dequeue(**&reactor.events, &mut events[0], 8) };
-
-        if count == 0 {
-            // adaptive polling
-            info!("no events in this reactor");
-            std::thread::sleep(Duration::from_secs(2));
-        }
-
-        reactor.threads[0].with(|| {
-            events.iter().take(count).for_each(|e| {
-                let event = unsafe { &mut *(e as *const _ as *mut cb_event) };
-                (event.func)(event.arg1, event.arg2);
-            });
-            reactor.run_futures();
-        });
-
-        unsafe {
-            spdk_mempool_put_bulk(MEM_POOL.get().unwrap().0, &mut events[0], 8)
-        }
-
-        reactor.threads.iter().skip(1).for_each(|t| unsafe {
-            spdk_thread_poll(t.0, 0, 0);
-        });
-    }
-    0
-}
-
 async fn my_async() {
     println!("im a future running on core {}", unsafe {
         spdk_env_get_current_core()
@@ -266,18 +342,6 @@ async fn my_async() {
 }
 
 pub fn reactors_start() {
-    Cores::count().into_iter().skip(1).for_each(|c| {
-        let rc = unsafe {
-            spdk_env_thread_launch_pinned(
-                c,
-                Some(reactor_poll),
-                c as *const u32 as *mut c_void,
-            )
-        };
-
-        assert_eq!(rc, 0)
-    });
-
     extern "C" fn thread_fn(arg: *mut c_void) {
         println!("Hello from core {}", unsafe { spdk_env_get_current_core() });
     }
@@ -297,7 +361,7 @@ pub fn reactors_start() {
             .unwrap();
     });
 
-    let _r = Reactor::spawn(3, async {
+    let _r = Reactors::spawn(3, async {
         async {
             unsafe {
                 spdk_subsystem_init(None, std::ptr::null_mut());

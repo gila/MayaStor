@@ -688,7 +688,10 @@ impl MayastorEnvironment {
         //            spdk_log_close();
         //        }
 
-        crate::core::reactor::reactors_start();
+        crate::core::reactor::Reactors::start();
+        crate::core::reactor::Reactors::iter().for_each(|r| {
+            dbg!(r);
+        });
 
         std::thread::sleep(Duration::from_secs(1000));
         // return the global rc value
