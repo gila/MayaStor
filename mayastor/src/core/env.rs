@@ -57,6 +57,7 @@ use crate::{
 use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
+use crate::core::Cores;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -687,15 +688,31 @@ impl MayastorEnvironment {
         //            spdk_env_fini();
         //            spdk_log_close();
         //        }
+        use crate::core::reactor::Reactors;
+        use crate::core::Cores;
+        Reactors::start();
 
-        crate::core::reactor::Reactors::start();
-        crate::core::reactor::Reactors::iter().for_each(|r| {
-            dbg!(r);
+        Cores::count().into_iter().for_each(|c| {
+           Reactors::spawn(c, async {
+               test().await;
+           })
         });
 
+
         crate::core::reactor::reactors_start();
-        std::thread::sleep(Duration::from_secs(1000));
+        Cores::count().into_iter().for_each(|r|{
+            Reactors::spawn( r, async {
+                info!("nu dan?");
+            })
+        });
+
+        std::thread::sleep(Duration::from_secs(1));
         // return the global rc value
         Ok(*GLOBAL_RC.lock().unwrap())
     }
+}
+
+async fn test() {
+    println!("hello from {}", crate::core::Cores::current());
+
 }

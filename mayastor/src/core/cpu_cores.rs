@@ -29,6 +29,10 @@ impl Cores {
         Cores(Self::get_core(Core::Last))
     }
 
+    pub fn current() -> u32 {
+        unsafe { spdk_env_get_current_core()}
+    }
+
     fn get_core(c: Core) -> u32 {
         unsafe {
             match c {
