@@ -693,6 +693,7 @@ impl MayastorEnvironment {
             dbg!(r);
         });
 
+        crate::core::reactor::reactors_start();
         std::thread::sleep(Duration::from_secs(1000));
         // return the global rc value
         Ok(*GLOBAL_RC.lock().unwrap())

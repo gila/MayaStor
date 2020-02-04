@@ -46,7 +46,10 @@ use crate::{
     },
     target,
 };
-use std::{cell::RefCell, slice::Iter};
+use std::{
+    cell::{RefCell, UnsafeCell},
+    slice::Iter,
+};
 
 #[derive(Debug)]
 pub struct Reactors(pub Vec<Reactor>);
@@ -57,7 +60,6 @@ pub struct Reactors(pub Vec<Reactor>);
 pub struct Ring(*mut spdk_ring);
 
 unsafe impl Sync for Ring {}
-
 unsafe impl Send for Ring {}
 
 impl Deref for Ring {
@@ -99,7 +101,7 @@ pub struct Reactor {
     lcore: u32,
     flags: u32,
     events: Ring,
-    pool: RefCell<LocalPool>,
+    pool: UnsafeCell<LocalPool>,
 }
 
 impl Reactors {
@@ -161,7 +163,7 @@ impl Reactors {
             .into_iter()
             .find(|r| r.lcore == core)
         {
-            c.pool.borrow().spawner().spawn_local(f).unwrap();
+            unsafe { (*c.pool.get()).spawner().spawn_local(f).unwrap() };
         } else {
             panic!("no such core")
         }
@@ -205,13 +207,13 @@ impl Reactor {
             lcore: core,
             flags: 0,
             events: Ring(r),
-            pool: RefCell::new(LocalPool::new()),
+            pool: UnsafeCell::new(LocalPool::new()),
         }
     }
 
-    pub fn run_futures(&self) {
-        self.pool.borrow_mut().run_until_stalled();
-    }
+    //    pub fn run_futures(&self) {
+    //        self.pool.borrow_mut().run_until_stalled();
+    //    }
 
     extern "C" fn poll(core: *mut c_void) -> i32 {
         if let Some(r) = REACTOR_LIST
@@ -220,8 +222,9 @@ impl Reactor {
             .into_iter()
             .find(|r| r.lcore == core as u32)
         {
+            let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
             loop {
-                r.poll_once(core as u32);
+                r.poll_once(&mut events);
             }
         }
         0
@@ -276,32 +279,30 @@ impl Reactor {
     //        work
     //    }
 
-    pub fn poll_once(&self) -> i32 {
-        let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
+    pub fn poll_once(&self, events: &mut [*mut c_void]) -> i32 {
         let mut work = 0;
         let count =
             unsafe { spdk_ring_dequeue(*self.events, &mut events[0], 8) };
 
-        if count != 0 {
-            self.threads[0].with(|| {
+        self.threads[0].with(|| {
+            if count == 0 {
                 events.iter().take(count).for_each(|e| {
-                    let event =
-                        unsafe { &mut *(e as *const _ as *mut cb_event) };
+                    let event = unsafe { &mut *(e as *const _ as *mut Event) };
                     (event.func)(event.arg1, event.arg2);
                 });
-                self.run_futures();
-            });
 
-            unsafe {
-                spdk_mempool_put_bulk(
-                    MEM_POOL.get().unwrap().0,
-                    &mut events[0],
-                    8,
-                )
+                unsafe {
+                    spdk_mempool_put_bulk(
+                        MEM_POOL.get().unwrap().0,
+                        &mut events[0],
+                        8,
+                    )
+                }
             }
 
+            unsafe { (*self.pool.get()).run_until_stalled() };
             work = 1;
-        }
+        });
 
         self.threads.iter().skip(work).for_each(|t| {
             work += t.poll();
@@ -317,12 +318,12 @@ impl Drop for Reactor {
     }
 }
 
-pub fn get_event() -> &'static mut cb_event {
+pub fn get_event() -> &'static mut Event {
     let e = unsafe { spdk_mempool_get(MEM_POOL.get().unwrap().0) };
-    unsafe { &mut *(e as *const _ as *mut cb_event) }
+    unsafe { &mut *(e as *const _ as *mut Event) }
 }
 
-pub struct cb_event {
+pub struct Event {
     lcore: u32,
     func: extern "C" fn(*mut c_void, *mut c_void),
     arg1: *mut c_void,
@@ -352,14 +353,14 @@ pub fn reactors_start() {
         });
     });
 
-    REACTOR_LIST.get().unwrap().0.iter().for_each(|r| {
-        let p = r.pool.borrow_mut();
-        p.spawner()
-            .spawn_local(async {
-                my_async().await;
-            })
-            .unwrap();
-    });
+    //    REACTOR_LIST.get().unwrap().0.iter().for_each(|r| {
+    //        let p = r.pool.borrow_mut();
+    //        p.spawner()
+    //            .spawn_local(async {
+    //                my_async().await;
+    //            })
+    //            .unwrap();
+    //    });
 
     let _r = Reactors::spawn(3, async {
         async {
