@@ -132,7 +132,7 @@ impl Reactor {
     /// this function gets called by DPDK
     extern "C" fn poll(core: *mut c_void) -> i32 {
         // let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
-        info!("polling reactor {}", core as u32);
+        info!("Polling reactor {}", core as u32);
         let reactor = Reactors::get(core as u32).unwrap();
         reactor.poll_reactor();
         info!("poll done");
@@ -173,13 +173,13 @@ impl Reactor {
 
     /// in effect the same as send_message except these use the rte_ring subsystem. It should be
     /// faster compared to the send_message() counter part as it has pre allocated structures.
-    pub fn spawn_on<F: 'static>(&self, f: F)
+    pub fn spawn_on<F>(&self, f: F)
         where
-            F: Future<Output=()>,
+            F: Future<Output=()> +'static,
     {
-        extern "C" fn unwrap<F: 'static>(args: *mut c_void)
+        extern "C" fn unwrap<F>(args: *mut c_void)
             where
-                F: Future<Output=()>,
+                F: Future<Output=()> + 'static,
         {
             let f: Box<F> = unsafe { Box::from_raw(args as *mut F) };
             let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
@@ -196,6 +196,20 @@ impl Reactor {
             error!("failed to dispatch future to mem pool");
             unsafe { Box::from_raw(ptr); }
         }
+    }
+
+    ///
+    pub fn ffi_into_future<F>(f: F)
+//        where F: FnOnce() {
+//
+//        let (s,r) = future::oneshot::channel::<bool>();
+//
+//        let c = |s,f| {
+//
+//        };
+//
+
+
     }
 
     /// suspend the reactor
