@@ -37,10 +37,9 @@ pub struct Ring(*mut spdk_ring);
 unsafe impl Sync for Ring {}
 
 unsafe impl Sync for Reactors {}
-
 unsafe impl Send for Reactors {}
 
-pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
+pub static mut REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
 
 #[repr(C, align(64))]
 #[derive(Debug)]
@@ -59,7 +58,10 @@ thread_local! {
 }
 
 impl Reactors {
+
+    /// initialize the reactor subsystems
     pub fn init() {
+
         let rc = unsafe { spdk_thread_lib_init(None, 0) };
         assert_eq!(rc, 0);
 
@@ -71,10 +73,11 @@ impl Reactors {
             })
             .collect::<Vec<_>>();
 
-        REACTOR_LIST.set(Reactors(reactors)).unwrap();
+       unsafe { REACTOR_LIST.set(Reactors(reactors)).unwrap() };
     }
 
-    pub fn start() {
+    /// start the polling of the reactors
+    pub fn start(_skip: u32) {
         Cores::count().into_iter().skip(1).for_each(|c| {
             let rc = unsafe {
                 spdk_env_thread_launch_pinned(
@@ -87,13 +90,15 @@ impl Reactors {
         });
     }
 
+    /// get a reference to the given core
     pub fn get(core: u32) -> Option<&'static Reactor> {
-        Some(REACTOR_LIST.get().unwrap().0[core as usize].borrow())
+        Some(unsafe { REACTOR_LIST.get().unwrap().0[core as usize].borrow()})
     }
 
     pub fn iter() -> Iter<'static, Reactor> {
-        REACTOR_LIST.get().unwrap().into_iter()
+        unsafe { REACTOR_LIST.get().unwrap().into_iter() }
     }
+
 }
 
 impl<'a> IntoIterator for &'a Reactors {
@@ -113,7 +118,8 @@ impl Reactor {
         });
 
         let (sx, rx) =
-            unbounded::<Pin<Box<dyn Future<Output = ()> + 'static>>>();
+            unbounded::<Pin<Box<dyn Future<Output=()> + 'static>>>();
+
         Self {
             threads: vec![thread],
             lcore: core,
@@ -122,14 +128,15 @@ impl Reactor {
             rx,
         }
     }
+
+    /// this function gets called by DPDK
     extern "C" fn poll(core: *mut c_void) -> i32 {
-       // let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
+        // let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
         info!("polling reactor {}", core as u32);
         let reactor = Reactors::get(core as u32).unwrap();
-        loop {
-            reactor.poll_reactor();
-            reactor.receive_futures();
-        }
+        reactor.poll_reactor();
+        info!("poll done");
+        0
     }
 
     /// run the futures
@@ -139,24 +146,24 @@ impl Reactor {
 
     /// receive futures and spawn them
     fn receive_futures(&self) {
-        let m: Vec<_> = self.rx.try_iter().collect();
-        m.into_iter().for_each(|m| {
+        self.rx.try_iter().for_each(|m| {
             self.spawn(m);
         });
     }
 
     /// send messages to the core/thread -- similar as spdk_thread_send_msg()
     pub fn send_future<F>(&self, future: F)
-    where
-        F: Future<Output = ()> + 'static,
+        where
+            F: Future<Output=()> + 'static,
     {
         self.sx.send(Box::pin(future)).unwrap();
     }
 
+    /// spawn
     pub fn spawn<F, R>(&self, future: F) -> async_task::JoinHandle<R, ()>
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
+        where
+            F: Future<Output=R> + 'static,
+            R: 'static,
     {
         let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
         let (task, handle) = async_task::spawn_local(future, schedule, ());
@@ -167,12 +174,12 @@ impl Reactor {
     /// in effect the same as send_message except these use the rte_ring subsystem. It should be
     /// faster compared to the send_message() counter part as it has pre allocated structures.
     pub fn spawn_on<F: 'static>(&self, f: F)
-    where
-        F: Future<Output = ()>,
+        where
+            F: Future<Output=()>,
     {
         extern "C" fn unwrap<F: 'static>(args: *mut c_void)
-        where
-            F: Future<Output = ()>,
+            where
+                F: Future<Output=()>,
         {
             let f: Box<F> = unsafe { Box::from_raw(args as *mut F) };
             let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
@@ -184,24 +191,39 @@ impl Reactor {
         let e = unsafe {
             spdk_thread_send_msg(self.threads[0].0, Some(unwrap::<F>), ptr)
         };
+
         if e != 0 {
-            error!("failed to dispatch future to mempool");
+            error!("failed to dispatch future to mem pool");
             unsafe { Box::from_raw(ptr); }
         }
     }
 
+    /// suspend the reactor
+    pub fn suspend(&mut self) {
+        self.flags = 3;
+    }
+
     /// poll this reactor to complete any work that is pending
     pub fn poll_reactor(&self) {
+        loop {
+            match self.flags {
+                3 => {
+                    unsafe { std::arch::x86_64::_mm_pause() };
+                },
+                _ => {
+                    self.receive_futures();
+                    self.threads[0].with(|| {
+                        self.run_futures();
+                    });
 
-        self.threads[0].with(|| {
-            self.run_futures();
-        });
-
-        // if there are any other threads poll them now skipping thread 0 as it has been
-        // polled already running the futures
-        self.threads.iter().skip(1).for_each(|t| {
-            t.poll();
-        });
+                    // if there are any other threads poll them now skipping thread 0 as it has been
+                    // polled already running the futures
+                    self.threads.iter().skip(1).for_each(|t| {
+                        t.poll();
+                    });
+                },
+            }
+        }
     }
 }
 

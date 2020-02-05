@@ -27,8 +27,6 @@ use spdk_sys::{
     spdk_conf_free,
     spdk_conf_read,
     spdk_conf_set_as_default,
-    spdk_cpuset_alloc,
-    spdk_cpuset_free,
     spdk_cpuset_set_cpu,
     spdk_cpuset_zero,
     spdk_env_get_core_count,
@@ -56,6 +54,7 @@ use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
 use crate::core::reactor::Reactors;
+use crate::core::REACTOR_LIST;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -79,12 +78,11 @@ fn parse_mb(src: &str) -> Result<i32, String> {
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-    name = "Mayastor",
-    about = "Containerized Attached Storage (CAS) for k8s",
-    version = "19.12.1",
-    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
+name = "Mayastor",
+about = "Containerized Attached Storage (CAS) for k8s",
+version = "19.12.1",
+raw(setting = "structopt::clap::AppSettings::ColoredHelp")
 )]
-
 pub struct MayastorCliArgs {
     #[structopt(short = "j")]
     /// Path to JSON formatted config file
@@ -99,9 +97,9 @@ pub struct MayastorCliArgs {
     /// The reactor mask to be used for starting up the instance
     pub reactor_mask: String,
     #[structopt(
-        short = "s",
-        parse(try_from_str = "parse_mb"),
-        default_value = "0"
+    short = "s",
+    parse(try_from_str = "parse_mb"),
+    default_value = "0"
     )]
     /// The maximum amount of hugepage memory we are allowed to allocate in MiB
     /// (default: all)
@@ -434,7 +432,7 @@ impl MayastorEnvironment {
                 CString::new(format!("--file-prefix=mayastor_pid{}", unsafe {
                     libc::getpid()
                 }))
-                .unwrap(),
+                    .unwrap(),
             );
         } else {
             args.push(
@@ -442,14 +440,14 @@ impl MayastorEnvironment {
                     "--file-prefix=mayastor_pid{}",
                     self.shm_id
                 ))
-                .unwrap(),
+                    .unwrap(),
             );
             args.push(CString::new("--proc-type=auto").unwrap());
         }
 
         // set the log levels of the DPDK libs, this can be overridden by
         // setting env_context
-        args.push(CString::new("--log-level=lib.eal:4").unwrap());
+        args.push(CString::new("--log-level=lib.eal:6").unwrap());
         args.push(CString::new("--log-level=lib.cryptodev:0").unwrap());
         args.push(CString::new("--log-level=user1:6").unwrap());
         args.push(CString::new("--match-allocations").unwrap());
@@ -568,8 +566,8 @@ impl MayastorEnvironment {
 
     /// start mayastor and call f when all is setup.
     pub fn start<F>(&mut self, _f: F) -> Result<i32>
-    where
-        F: FnOnce(),
+        where
+            F: FnOnce(),
     {
         self.read_config_file()?;
         self.initialize_eal();
@@ -585,116 +583,36 @@ impl MayastorEnvironment {
         });
 
         self.install_signal_handlers()?;
-        //self.init_main_thread()?;
 
-        // init the subsystems and RPC server, this must be done in context of
-        // the "stack less" threads.
-        //        if let Some(mt) = INIT_THREAD.get() {
-        //            mt.with(|| unsafe {
-        //                // all futures will be executed from the management
-        // thread                // (mm_thread)
-        //                executor::start();
-        //
-        //                let rpc =
-        // CString::new(self.rpc_addr.as_str()).unwrap();
-        //
-        //                if let Some(ref json) = self.json_config_file {
-        //                    info!("Loading JSON configuration file");
-        //
-        //                    let jsonfile =
-        // CString::new(json.as_str()).unwrap();
-        // spdk_app_json_config_load(
-        // jsonfile.as_ptr(),                        rpc.as_ptr(),
-        //                        Some(Self::start_rpc),
-        //                        rpc.into_raw() as _,
-        //                    );
-        //                } else {
-        //                    spdk_subsystem_init(
-        //                        Some(Self::start_rpc),
-        //                        rpc.into_raw() as _,
-        //                    );
-        //                }
-        //
-        //                if let Some(_key) = env::var_os("MAYASTOR_DELAY") {
-        //                    delay::register();
-        //                }
-        //            });
-        //        }
-        //
-        //        pool::register_pool_methods();
-        //        replica::register_replica_methods();
-        //
-        //        if let Some(mt) = INIT_THREAD.get() {
-        //            mt.with(|| {
-        //                f();
-        //            });
-        //        }
-
-        unsafe {
-            crate::core::reactor::Reactors::init();
-        };
-        // dbg!(MEM_POOL.get());
-        // dbg!(REACTOR_LIST.get());
-        //        unsafe {
-        //            // will block the main thread until we exit
-        //            spdk_reactors_start();
-        //
-        //            info!("Finalizing Mayastor shutdown...");
-        //            delay::unregister();
-        //            spdk_reactors_fini();
-        //            spdk_env_fini();
-        //            spdk_log_close();
-        //        }
-        Reactors::start();
-
-
+        // allocate a Reactor per core
+        Reactors::init();
+        // start "poll loop" for all cores except this one
+        Reactors::start(0);
+        // get a handle to the reactor that is running one core 2
         let r = Reactors::get(2).unwrap();
+        // get our current core
         let this_core = Cores::current();
-                r.send_future(async move {
-                    info!("send from {} to {}", this_core, Cores::current());
-                });
 
-        //        r.send_message(async {
-        //                info!("getting executed");
-        //                unsafe {
-        //                    spdk_subsystem_init(None, std::ptr::null_mut());
-        //                    
-        // spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
-        //                    spdk_rpc_set_state(SPDK_RPC_RUNTIME);
-        //                }
-        //                
-        // dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
-        //            });
+        r.send_future(async move {
+            info!("send from core {} to core {}", this_core, Cores::current());
+        });
 
-        r.spawn_on(async {
-            info!("getting executed");
-            unsafe {
-                spdk_subsystem_init(None, std::ptr::null_mut());
-                spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
-                spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+        r.send_future(async {
+            if let Err(result) = target::nvmf::init("127.0.0.1").await {
+                error!("failed to init target")
             }
-            dbg!(target::nvmf::init("127.0.0.1").await.unwrap());
         });
 
         info!("message send");
         std::thread::sleep(Duration::from_secs(5));
 
-        //        Cores::count().into_iter().skip(1).take(1).for_each(|r| {
-        //            Reactors::spawn(r, async {
-        //                async {
-        //                    unsafe {
-        //                        spdk_subsystem_init(None,
-        // std::ptr::null_mut());                        
-        // spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
-        //                        spdk_rpc_set_state(SPDK_RPC_RUNTIME);
-        //                    }
-        //                    
-        // dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
-        //                }.boxed_local();
-        //            }.boxed_local());
-        //        });
+        let r = unsafe { REACTOR_LIST.get_mut().unwrap() };
+        r.0.iter_mut().for_each(|r|{
+            r.suspend();
+        });
 
-        // return the global rc value
+
+        std::thread::sleep(Duration::from_secs(60));
         Ok(*GLOBAL_RC.lock().unwrap())
     }
 }

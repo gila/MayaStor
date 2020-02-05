@@ -1,5 +1,6 @@
-use spdk_sys::{spdk_thread, spdk_set_thread, spdk_thread_poll};
-use snafu::{Snafu};
+use spdk_sys::{spdk_thread, spdk_set_thread, spdk_thread_poll, spdk_thread_create};
+use snafu::Snafu;
+use std::ffi::CString;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -12,9 +13,10 @@ pub enum Error {
 /// should not be confused with an actual thread. Consider it more to be
 /// analogous to a container to which you can submit work and poll it to drive
 /// the submitted work to completion.
-pub struct Mthread(pub (crate) *mut spdk_thread);
+pub struct Mthread(pub(crate) *mut spdk_thread);
 
 unsafe impl Send for Mthread {}
+
 unsafe impl Sync for Mthread {}
 
 impl Mthread {
@@ -23,6 +25,12 @@ impl Mthread {
     ///
     /// Any function can be executed here however, this should typically be used
     /// to execute functions that reference any FFI to SPDK.
+
+    pub fn new(name: String) -> Self {
+        let name = CString::new(name).unwrap();
+        let t = unsafe { spdk_thread_create(name.as_ptr(), std::ptr::null_mut()) };
+        Self::from_null_checked(t).unwrap()
+    }
     ///
     /// # Note
     ///
@@ -30,7 +38,6 @@ impl Mthread {
     /// long-running functions in general follow the nodejs event loop
     /// model, and you should be good.
     pub fn with<F: FnOnce()>(self, f: F) -> Self {
-
         unsafe { spdk_set_thread(self.0) };
         f();
         self.poll();
