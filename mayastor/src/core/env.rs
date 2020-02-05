@@ -50,8 +50,6 @@ use crate::{
     delay,
     executor,
     logger,
-    pool,
-    replica,
     target,
 };
 use byte_unit::{Byte, ByteUnit};
@@ -610,7 +608,7 @@ impl MayastorEnvironment {
     }
 
     /// start mayastor and call f when all is setup.
-    pub fn start<F>(&mut self, f: F) -> Result<i32>
+    pub fn start<F>(&mut self, _f: F) -> Result<i32>
     where
         F: FnOnce(),
     {
@@ -692,7 +690,7 @@ impl MayastorEnvironment {
 
 
         let r = Reactors::get(2).unwrap();
-        let this_core = Cores::current();
+        let _this_core = Cores::current();
         //        r.send_message(move ||{
         //            info!("send from {} to {}", this_core, Cores::current());
         //        });
@@ -716,7 +714,7 @@ impl MayastorEnvironment {
                 spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
                 spdk_rpc_set_state(SPDK_RPC_RUNTIME);
             }
-            dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
+            dbg!(target::nvmf::init("127.0.0.1").await.unwrap());
         });
 
         info!("message send");

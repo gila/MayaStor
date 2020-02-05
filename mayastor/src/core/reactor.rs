@@ -196,7 +196,7 @@ impl Reactor {
         // if there are any other threads poll them now skipping thread 0 as it has been
         // polled already running the futures
         self.threads.iter().skip(1).for_each(|t| {
-            let _ = t.poll();
+            t.poll();
         });
     }
 }

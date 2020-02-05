@@ -11,7 +11,6 @@ use spdk_sys::spdk_bdev_io;
 use crate::{
     bdev::nexus::{
         nexus_bdev::{nexus_lookup, NexusState},
-        nexus_io::Bio,
     },
     core::{Descriptor, DmaBuf, DmaError},
     poller::{register_poller, PollTask},
@@ -132,18 +131,18 @@ impl RebuildTask {
 
     /// callback when the read of the rebuild progress has completed
     extern "C" fn read_complete(
-        io: *mut spdk_bdev_io,
-        success: bool,
-        ctx: *mut c_void,
+        _io: *mut spdk_bdev_io,
+        _success: bool,
+        _ctx: *mut c_void,
     ) {
         unimplemented!()
     }
 
     /// callback function when write IO of the rebuild phase has completed
     extern "C" fn write_complete(
-        io: *mut spdk_bdev_io,
-        success: bool,
-        ctx: *mut c_void,
+        _io: *mut spdk_bdev_io,
+        _success: bool,
+        _ctx: *mut c_void,
     ) { unimplemented!();
     }
 
@@ -254,7 +253,7 @@ impl RebuildTask {
 
     /// progress function that prints to the log; this will be removed in the
     /// future and will be exposed via an API call
-    extern "C" fn progress(ctx: *mut c_void) -> i32 {
+    extern "C" fn progress(_ctx: *mut c_void) -> i32 {
         unimplemented!()
     }
 

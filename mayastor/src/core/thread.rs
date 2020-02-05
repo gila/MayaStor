@@ -39,7 +39,7 @@ impl Mthread {
     }
 
     pub fn poll(&self) {
-        while let done = unsafe { spdk_thread_poll(self.0, 0, 0) } < 1{};
+        while let _done = unsafe { spdk_thread_poll(self.0, 0, 0) } < 1{};
     }
 
     pub fn inner(self) -> *const spdk_thread {

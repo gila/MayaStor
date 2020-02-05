@@ -10,7 +10,7 @@ use mayastor::{
 };
 
 use structopt::StructOpt;
-use sysfs;
+
 
 mayastor::CPS_INIT!();
 
