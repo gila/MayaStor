@@ -148,10 +148,6 @@ extern "C" {
     pub fn spdk_env_fini();
     pub fn spdk_log_close();
     pub fn spdk_log_set_flag(name: *const c_char, enable: bool) -> i32;
-    pub fn spdk_reactors_fini();
-    pub fn spdk_reactors_init() -> i32;
-    pub fn spdk_reactors_start();
-    pub fn spdk_reactors_stop(ctx: *mut c_void);
     pub fn spdk_rpc_finish();
     pub fn spdk_rpc_initialize(listen: *mut libc::c_char);
     pub fn spdk_subsystem_fini(
@@ -271,7 +267,7 @@ extern "C" fn _mayastor_shutdown_cb(arg: *mut c_void) {
         Box::new(|| unsafe {
             spdk_rpc_finish();
             debug!("RPC server stopped");
-            spdk_subsystem_fini(Some(spdk_reactors_stop), std::ptr::null_mut());
+            spdk_subsystem_fini(None, std::ptr::null_mut());
             debug!("subsystem fini dispatched");
         }),
     );
@@ -489,43 +485,6 @@ impl MayastorEnvironment {
     /// Setup a "stackless thread", which will be our management thread. This
     /// thread is also used to initiate the shutdown.
     fn init_main_thread(&self) -> Result<()> {
-        let rc = unsafe { spdk_reactors_init() };
-
-        if rc != 0 {
-            error!("Failed to initialize reactors, there is no point to continue, error code: {}", rc);
-            std::process::exit(rc);
-        }
-
-        let cpu_mask = unsafe { spdk_cpuset_alloc() };
-
-        if cpu_mask.is_null() {
-            error!("CPU set allocation failed, aborting startup");
-            std::process::exit(1);
-        }
-
-        unsafe {
-            spdk_cpuset_zero(cpu_mask);
-            spdk_cpuset_set_cpu(cpu_mask, spdk_env_get_current_core(), true);
-            spdk_cpuset_free(cpu_mask);
-        }
-
-        // allocate the mayastor management thread (mm_thread)
-        let thread = {
-            let name = CString::new("mm_thread").unwrap();
-            unsafe { spdk_thread_create(name.as_ptr(), cpu_mask) }
-        };
-
-        if thread.is_null() {
-            error!(
-                "Failed to allocate the management thread, aborting startup"
-            );
-            std::process::exit(1)
-        }
-
-        INIT_THREAD
-            .set(Mthread::from_null_checked(thread).unwrap())
-            .unwrap();
-
         Ok(())
     }
 
@@ -690,10 +649,10 @@ impl MayastorEnvironment {
 
 
         let r = Reactors::get(2).unwrap();
-        let _this_core = Cores::current();
-        //        r.send_message(move ||{
-        //            info!("send from {} to {}", this_core, Cores::current());
-        //        });
+        let this_core = Cores::current();
+                r.send_future(async move {
+                    info!("send from {} to {}", this_core, Cores::current());
+                });
 
         //        r.send_message(async {
         //                info!("getting executed");

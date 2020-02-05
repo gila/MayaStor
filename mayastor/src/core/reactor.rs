@@ -83,7 +83,6 @@ impl Reactors {
                     c as *const u32 as *mut c_void,
                 )
             };
-
             assert_eq!(rc, 0)
         });
     }
@@ -128,29 +127,30 @@ impl Reactor {
         info!("polling reactor {}", core as u32);
         let reactor = Reactors::get(core as u32).unwrap();
         loop {
-            reactor.run_messages();
             reactor.poll_reactor();
+            reactor.receive_futures();
         }
     }
 
-    /// Spawns a future on the executor.
+    /// run the futures
     fn run_futures(&self) {
         QUEUE.with(|(_, r)| r.try_iter().for_each(|f| f.run()))
     }
 
-    fn run_messages(&self) {
+    /// receive futures and spawn them
+    fn receive_futures(&self) {
         let m: Vec<_> = self.rx.try_iter().collect();
         m.into_iter().for_each(|m| {
-            info!("got some!");
             self.spawn(m);
         });
     }
 
-    pub fn send_message<M>(&self, message: M)
+    /// send messages to the core/thread -- similar as spdk_thread_send_msg()
+    pub fn send_future<F>(&self, future: F)
     where
-        M: Future<Output = ()> + 'static,
+        F: Future<Output = ()> + 'static,
     {
-        self.sx.send(Box::pin(message)).unwrap();
+        self.sx.send(Box::pin(future)).unwrap();
     }
 
     pub fn spawn<F, R>(&self, future: F) -> async_task::JoinHandle<R, ()>
@@ -164,6 +164,8 @@ impl Reactor {
         handle
     }
 
+    /// in effect the same as send_message except these use the rte_ring subsystem. It should be
+    /// faster compared to the send_message() counter part as it has pre allocated structures.
     pub fn spawn_on<F: 'static>(&self, f: F)
     where
         F: Future<Output = ()>,
@@ -188,7 +190,9 @@ impl Reactor {
         }
     }
 
+    /// poll this reactor to complete any work that is pending
     pub fn poll_reactor(&self) {
+
         self.threads[0].with(|| {
             self.run_futures();
         });
