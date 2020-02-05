@@ -8,6 +8,7 @@ mod dma;
 mod env;
 mod handle;
 mod reactor;
+mod thread;
 mod uuid;
 
 pub mod event;
@@ -19,8 +20,9 @@ pub use descriptor::Descriptor;
 pub use dma::{DmaBuf, DmaError};
 pub use env::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment};
 pub use handle::BdevHandle;
-use nix::errno::Errno;
 pub use reactor::{REACTOR_LIST};
+pub use thread::{Mthread};
+use nix::errno::Errno;
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]

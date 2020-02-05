@@ -1,12 +1,9 @@
 use std::{
     borrow::{Borrow},
-    cell::{RefCell, UnsafeCell},
     ffi::CString,
-    ops::{Deref, DerefMut},
     os::raw::c_void,
     pin::Pin,
     slice::Iter,
-    time::Duration,
 };
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -24,7 +21,7 @@ use spdk_sys::{
 
 use crate::{
     core::{
-        event::{Mthread},
+        Mthread,
         Cores,
     },
 };
@@ -185,6 +182,10 @@ impl Reactor {
         let e = unsafe {
             spdk_thread_send_msg(self.threads[0].0, Some(unwrap::<F>), ptr)
         };
+        if e != 0 {
+            error!("failed to dispatch future to mempool");
+            unsafe { Box::from_raw(ptr); }
+        }
     }
 
     pub fn poll_reactor(&self) {
@@ -192,7 +193,9 @@ impl Reactor {
             self.run_futures();
         });
 
-        self.threads.iter().skip(0).for_each(|t| {
+        // if there are any other threads poll them now skipping thread 0 as it has been
+        // polled already running the futures
+        self.threads.iter().skip(1).for_each(|t| {
             let _ = t.poll();
         });
     }
@@ -200,7 +203,6 @@ impl Reactor {
 
 impl Drop for Reactor {
     fn drop(&mut self) {
-//        unsafe { spdk_ring_free(*self.events) }
     }
 }
 

@@ -46,7 +46,7 @@ use spdk_sys::{
 };
 
 use crate::{
-    core::{event::Mthread, Cores, REACTOR_LIST},
+    core::{Cores, Mthread},
     delay,
     executor,
     logger,
