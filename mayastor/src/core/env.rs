@@ -46,7 +46,7 @@ use spdk_sys::{
 };
 
 use crate::{
-    core::{event::Mthread, MEM_POOL, REACTOR_LIST},
+    core::{event::Mthread, Cores, REACTOR_LIST},
     delay,
     executor,
     logger,
@@ -57,7 +57,7 @@ use crate::{
 use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
-use crate::core::Cores;
+use crate::core::reactor::Reactors;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -688,31 +688,63 @@ impl MayastorEnvironment {
         //            spdk_env_fini();
         //            spdk_log_close();
         //        }
-        use crate::core::reactor::Reactors;
-        use crate::core::Cores;
         Reactors::start();
 
-        Cores::count().into_iter().for_each(|c| {
-           Reactors::spawn(c, async {
-               test().await;
-           })
+
+        let r = Reactors::get(2).unwrap();
+        let this_core = Cores::current();
+        //        r.send_message(move ||{
+        //            info!("send from {} to {}", this_core, Cores::current());
+        //        });
+
+        //        r.send_message(async {
+        //                info!("getting executed");
+        //                unsafe {
+        //                    spdk_subsystem_init(None, std::ptr::null_mut());
+        //                    
+        // spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
+        //                    spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+        //                }
+        //                
+        // dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
+        //            });
+
+        r.spawn_on(async {
+            info!("getting executed");
+            unsafe {
+                spdk_subsystem_init(None, std::ptr::null_mut());
+                spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
+                spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+            }
+            dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
         });
 
+        info!("message send");
+        std::thread::sleep(Duration::from_secs(5));
 
-        crate::core::reactor::reactors_start();
-        Cores::count().into_iter().for_each(|r|{
-            Reactors::spawn( r, async {
-                info!("nu dan?");
-            })
-        });
+        //        Cores::count().into_iter().skip(1).take(1).for_each(|r| {
+        //            Reactors::spawn(r, async {
+        //                async {
+        //                    unsafe {
+        //                        spdk_subsystem_init(None,
+        // std::ptr::null_mut());                        
+        // spdk_rpc_initialize("/var/tmp/spdk.sock\0".as_ptr() as *mut _);
+        //                        spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+        //                    }
+        //                    
+        // dbg!(target::nvmf::init("127.0.0.1".into()).await.unwrap());
+        //                }.boxed_local();
+        //            }.boxed_local());
+        //        });
 
-        std::thread::sleep(Duration::from_secs(1));
         // return the global rc value
         Ok(*GLOBAL_RC.lock().unwrap())
     }
 }
 
 async fn test() {
-    println!("hello from {}", crate::core::Cores::current());
-
+    println!(
+        "hoe kan dit joh! hello from {}",
+        crate::core::Cores::current()
+    );
 }

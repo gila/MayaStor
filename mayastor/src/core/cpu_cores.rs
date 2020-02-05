@@ -30,7 +30,7 @@ impl Cores {
     }
 
     pub fn current() -> u32 {
-        unsafe { spdk_env_get_current_core()}
+        unsafe { spdk_env_get_current_core() }
     }
 
     fn get_core(c: Core) -> u32 {

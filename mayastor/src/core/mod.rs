@@ -20,7 +20,7 @@ pub use dma::{DmaBuf, DmaError};
 pub use env::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment};
 pub use handle::BdevHandle;
 use nix::errno::Errno;
-pub use reactor::{MEM_POOL, REACTOR_LIST};
+pub use reactor::{REACTOR_LIST};
 use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
