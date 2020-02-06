@@ -590,7 +590,7 @@ impl MayastorEnvironment {
         // start "poll loop" for all cores except this one
         Reactors::launch_remote(3).unwrap();
         // get a handle to the reactor that is running one core 2
-        let r = Reactors::by_core(3).unwrap();
+        let r = Reactors::get_by_core(3).unwrap();
         // get our current core
         let this_core = Cores::current();
 
@@ -626,7 +626,7 @@ impl MayastorEnvironment {
             println!("{}:{}", r.core(), r.get_sate())
         });
 
-        Reactors::launch_self();
+        Reactors::launch_master();
 
         Ok(*GLOBAL_RC.lock().unwrap())
 
