@@ -1,23 +1,17 @@
 use std::{
-    borrow::{Borrow},
+    borrow::Borrow,
     ffi::CString,
     os::raw::c_void,
     pin::Pin,
     slice::Iter,
 };
-
+use std::sync::atomic::{AtomicUsize, Ordering};
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use futures::{Future};
+use futures::Future;
 use log::info;
 use once_cell::sync::OnceCell;
 
-use spdk_sys::{
-    spdk_env_thread_launch_pinned,
-    spdk_ring,
-    spdk_thread_create,
-    spdk_thread_lib_init,
-    spdk_thread_send_msg,
-};
+use spdk_sys::{spdk_env_thread_launch_pinned, spdk_ring, spdk_thread_create, spdk_thread_lib_init, spdk_thread_send_msg, spdk_env_thread_wait_all};
 
 use crate::{
     core::{
@@ -25,6 +19,13 @@ use crate::{
         Cores,
     },
 };
+use std::cell::Cell;
+use std::time::Duration;
+
+pub(crate) const INIT: usize = 1 << 1;
+pub(crate) const POLLING: usize = 1 << 2;
+pub(crate) const SHUTDOWN: usize = 1 << 3;
+pub(crate) const SUSPEND: usize = 1 << 4;
 
 #[derive(Debug)]
 pub struct Reactors(pub Vec<Reactor>);
@@ -32,23 +33,24 @@ pub struct Reactors(pub Vec<Reactor>);
 // XXX likely its a good idea to not bindgen these and spell them out ourselves
 // to avoid the ducktyping
 #[derive(Debug)]
-pub struct Ring(*mut spdk_ring);
+struct Ring(*mut spdk_ring);
 
 unsafe impl Sync for Ring {}
 
 unsafe impl Sync for Reactors {}
+
 unsafe impl Send for Reactors {}
 
-pub static mut REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
+pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
 
 #[repr(C, align(64))]
 #[derive(Debug)]
 pub struct Reactor {
     threads: Vec<Mthread>,
     lcore: u32,
-    flags: u32,
-    sx: Sender<Pin<Box<dyn Future<Output = ()> + 'static>>>,
-    rx: Receiver<Pin<Box<dyn Future<Output = ()> + 'static>>>,
+    flags: Cell<usize>,
+    sx: Sender<Pin<Box<dyn Future<Output=()> + 'static>>>,
+    rx: Receiver<Pin<Box<dyn Future<Output=()> + 'static>>>,
 }
 
 type Task = async_task::Task<()>;
@@ -58,47 +60,60 @@ thread_local! {
 }
 
 impl Reactors {
-
     /// initialize the reactor subsystems
     pub fn init() {
+        REACTOR_LIST.get_or_init(|| {
+            let rc = unsafe { spdk_thread_lib_init(None, 0) };
+            assert_eq!(rc, 0);
 
-        let rc = unsafe { spdk_thread_lib_init(None, 0) };
-        assert_eq!(rc, 0);
-
-        let reactors = Cores::count()
-            .into_iter()
-            .map(|c| {
-                info!("init core: {}", c);
-                Reactor::new(c)
-            })
-            .collect::<Vec<_>>();
-
-       unsafe { REACTOR_LIST.set(Reactors(reactors)).unwrap() };
-    }
-
-    /// start the polling of the reactors
-    pub fn start(_skip: u32) {
-        Cores::count().into_iter().skip(1).for_each(|c| {
-            let rc = unsafe {
-                spdk_env_thread_launch_pinned(
-                    c,
-                    Some(Reactor::poll),
-                    c as *const u32 as *mut c_void,
-                )
-            };
-            assert_eq!(rc, 0)
+            Reactors(Cores::count()
+                .into_iter()
+                .map(|c| {
+                    info!("init core: {}", c);
+                    Reactor::new(c)
+                })
+                .collect::<Vec<_>>())
         });
     }
 
+    pub fn launch_self() {
+        assert_eq!(Cores::current(), Cores::first());
+        Reactor::poll(Cores::current() as *const u32 as *mut c_void);
+        unsafe { spdk_env_thread_wait_all() };
+    }
+
+    /// start the polling the reactor on the given core
+    pub fn launch_remote(core: u32) -> Result<(), ()> {
+        
+        if core == Cores::current() {
+            info!("skipping self");
+            return Ok(())
+        }
+
+        if  Cores::count().into_iter().any(|c| c == core) {
+            let rc = unsafe {
+                spdk_env_thread_launch_pinned(
+                    core,
+                    Some(Reactor::poll),
+                    core as *const u32 as *mut c_void,
+                )
+            };
+            if rc == 0 {
+                return Ok(());
+            }
+        }
+        error!("failed to launche core {}", core);
+        Err(())
+    }
+
     /// get a reference to the given core
-    pub fn get(core: u32) -> Option<&'static Reactor> {
-        Some(unsafe { REACTOR_LIST.get().unwrap().0[core as usize].borrow()})
+    pub fn by_core(core: u32) -> Option<&'static Reactor> {
+        Reactors::iter().find(|c| c.lcore == core)
     }
 
     pub fn iter() -> Iter<'static, Reactor> {
-        unsafe { REACTOR_LIST.get().unwrap().into_iter() }
+        REACTOR_LIST.get().unwrap().into_iter()
     }
-
 }
 
 impl<'a> IntoIterator for &'a Reactors {
@@ -123,7 +138,7 @@ impl Reactor {
         Self {
             threads: vec![thread],
             lcore: core,
-            flags: 0,
+            flags: Cell::new(INIT),
             sx,
             rx,
         }
@@ -133,7 +148,8 @@ impl Reactor {
     extern "C" fn poll(core: *mut c_void) -> i32 {
         // let mut events: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
         info!("Polling reactor {}", core as u32);
-        let reactor = Reactors::get(core as u32).unwrap();
+        let reactor = Reactors::by_core(core as u32).unwrap();
+        reactor.running();
         reactor.poll_reactor();
         info!("poll done");
         0
@@ -175,7 +191,7 @@ impl Reactor {
     /// faster compared to the send_message() counter part as it has pre allocated structures.
     pub fn spawn_on<F>(&self, f: F)
         where
-            F: Future<Output=()> +'static,
+            F: Future<Output=()> + 'static,
     {
         extern "C" fn unwrap<F>(args: *mut c_void)
             where
@@ -198,33 +214,37 @@ impl Reactor {
         }
     }
 
-    ///
-    pub fn ffi_into_future<F>(f: F)
-//        where F: FnOnce() {
-//
-//        let (s,r) = future::oneshot::channel::<bool>();
-//
-//        let c = |s,f| {
-//
-//        };
-//
-
-
+    fn set_state(&self, state: usize) {
+        match state {
+            SUSPEND | POLLING | SHUTDOWN => self.flags.set(state),
+            _ => { panic!("Invalid state") }
+        }
     }
 
-    /// suspend the reactor
-    pub fn suspend(&mut self) {
-        self.flags = 3;
+    pub fn suspend(&self) {
+        self.set_state(SUSPEND)
+    }
+
+    pub fn running(&self) {
+        self.set_state(POLLING)
+    }
+
+    pub fn get_sate(&self) -> usize {
+        self.flags.get()
+    }
+
+    pub fn core(&self) -> u32 {
+        self.lcore
     }
 
     /// poll this reactor to complete any work that is pending
     pub fn poll_reactor(&self) {
         loop {
-            match self.flags {
-                3 => {
-                    unsafe { std::arch::x86_64::_mm_pause() };
+            match self.flags.get() {
+                SUSPEND => {
+                    std::thread::sleep(Duration::from_millis(1));
                 },
-                _ => {
+                POLLING => {
                     self.receive_futures();
                     self.threads[0].with(|| {
                         self.run_futures();
@@ -236,13 +256,19 @@ impl Reactor {
                         t.poll();
                     });
                 },
+                SHUTDOWN => {
+                    info!("reactor {} shutdown requested", self.lcore);
+                    break;
+                },
+                _ => { panic!("invalid reactor state {}", self.flags.get()) }
             }
         }
+
+        debug!("poll loop exit")
     }
 }
 
 impl Drop for Reactor {
-    fn drop(&mut self) {
-    }
+    fn drop(&mut self) {}
 }
 

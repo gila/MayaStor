@@ -586,10 +586,11 @@ impl MayastorEnvironment {
 
         // allocate a Reactor per core
         Reactors::init();
+        dbg!(Cores::current());
         // start "poll loop" for all cores except this one
-        Reactors::start(0);
+        Reactors::launch_remote(3).unwrap();
         // get a handle to the reactor that is running one core 2
-        let r = Reactors::get(2).unwrap();
+        let r = Reactors::by_core(3).unwrap();
         // get our current core
         let this_core = Cores::current();
 
@@ -604,18 +605,34 @@ impl MayastorEnvironment {
         });
 
         info!("message send");
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_secs(1));
 
-        let r = unsafe { REACTOR_LIST.get_mut().unwrap() };
-        r.0.iter_mut().for_each(|r|{
+        Reactors::iter().for_each(|r|{
             r.suspend();
         });
 
+        Reactors::iter().for_each(|r| {
+           println!("{}:{}", r.core(), r.get_sate())
+        });
 
-        std::thread::sleep(Duration::from_secs(60));
+
+        std::thread::sleep(Duration::from_secs(1));
+
+        Reactors::iter().for_each(|r| r.running());
+
+        info!("all cores at full throttle");
+
+        Reactors::iter().for_each(|r| {
+            println!("{}:{}", r.core(), r.get_sate())
+        });
+
+        Reactors::launch_self();
+
         Ok(*GLOBAL_RC.lock().unwrap())
+
     }
 }
+
 
 async fn test() {
     println!(

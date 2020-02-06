@@ -21,8 +21,8 @@ impl Cores {
         Cores(Self::get_core(Core::Count))
     }
 
-    pub fn first() -> Self {
-        Cores(Self::get_core(Core::First))
+    pub fn first() -> u32 {
+        Self::get_core(Core::First)
     }
 
     pub fn last() -> Self {
