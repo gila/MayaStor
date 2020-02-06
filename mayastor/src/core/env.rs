@@ -44,17 +44,21 @@ use spdk_sys::{
 };
 
 use crate::{
-    core::{Cores, Mthread},
+    core::{
+        reactor::{Reactor, Reactors},
+        Cores,
+        Mthread,
+        REACTOR_LIST,
+    },
     delay,
     executor,
+    executor::done_errno_cb,
     logger,
     target,
 };
 use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
-use crate::core::reactor::Reactors;
-use crate::core::REACTOR_LIST;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -78,10 +82,10 @@ fn parse_mb(src: &str) -> Result<i32, String> {
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-name = "Mayastor",
-about = "Containerized Attached Storage (CAS) for k8s",
-version = "19.12.1",
-raw(setting = "structopt::clap::AppSettings::ColoredHelp")
+    name = "Mayastor",
+    about = "Containerized Attached Storage (CAS) for k8s",
+    version = "19.12.1",
+    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
 )]
 pub struct MayastorCliArgs {
     #[structopt(short = "j")]
@@ -97,9 +101,9 @@ pub struct MayastorCliArgs {
     /// The reactor mask to be used for starting up the instance
     pub reactor_mask: String,
     #[structopt(
-    short = "s",
-    parse(try_from_str = "parse_mb"),
-    default_value = "0"
+        short = "s",
+        parse(try_from_str = "parse_mb"),
+        default_value = "0"
     )]
     /// The maximum amount of hugepage memory we are allowed to allocate in MiB
     /// (default: all)
@@ -173,7 +177,7 @@ pub enum EnvError {
 type Result<T, E = EnvError> = std::result::Result<T, E>;
 
 /// Mayastor argument
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MayastorEnvironment {
     config: Option<String>,
     delay_subsystem_init: bool,
@@ -236,7 +240,7 @@ impl Default for MayastorEnvironment {
 
 /// The actual routine which does the mayastor shutdown.
 /// Must be called on the same thread which did the init.
-extern "C" fn _mayastor_shutdown_cb(arg: *mut c_void) {
+async fn _mayastor_shutdown_cb(arg: *mut c_void) {
     let rc = arg as i32;
 
     if rc != 0 {
@@ -254,35 +258,22 @@ extern "C" fn _mayastor_shutdown_cb(arg: *mut c_void) {
     *GLOBAL_RC.lock().unwrap() = rc;
 
     target::iscsi::fini();
-    let fut = async move {
+    let f = async move {
         if let Err(msg) = target::nvmf::fini().await {
             error!("Failed to finalize nvmf target: {}", msg);
         }
     };
-    delay::unregister();
-    executor::stop(
-        fut,
-        Box::new(|| unsafe {
-            spdk_rpc_finish();
-            debug!("RPC server stopped");
-            spdk_subsystem_fini(None, std::ptr::null_mut());
-            debug!("subsystem fini dispatched");
-        }),
-    );
+    f.await;
+
+    info!("targets down");
+    Reactors::iter().for_each(|r| r.shutdown());
 }
 
 /// main shutdown routine for mayastor
 pub fn mayastor_env_stop(rc: i32) {
-    if let Some(t) = INIT_THREAD.get() {
-        unsafe {
-            spdk_sys::spdk_set_thread(t.inner_mut());
-            spdk_sys::spdk_thread_send_msg(
-                t.inner(),
-                Some(_mayastor_shutdown_cb),
-                rc as *const c_void as *mut c_void,
-            );
-        }
-    }
+    Reactors::get_by_core(0).unwrap().send_future( async move {
+        _mayastor_shutdown_cb(rc as *const i32 as *mut c_void).await;
+    });
 }
 
 /// called on SIGINT and SIGTERM
@@ -290,8 +281,9 @@ extern "C" fn mayastor_signal_handler(signo: i32) {
     warn!("Received SIGNO: {}", signo);
     // we don't differentiate between signal numbers for now, all signals will
     // cause a shutdown
-    std::process::exit(1);
-    mayastor_env_stop(signo);
+    Reactors::get_current().unwrap().send_future(async move {
+        _mayastor_shutdown_cb(signo as *const i32 as *mut c_void).await;
+    });
 }
 
 impl MayastorEnvironment {
@@ -432,7 +424,7 @@ impl MayastorEnvironment {
                 CString::new(format!("--file-prefix=mayastor_pid{}", unsafe {
                     libc::getpid()
                 }))
-                    .unwrap(),
+                .unwrap(),
             );
         } else {
             args.push(
@@ -440,7 +432,7 @@ impl MayastorEnvironment {
                     "--file-prefix=mayastor_pid{}",
                     self.shm_id
                 ))
-                    .unwrap(),
+                .unwrap(),
             );
             args.push(CString::new("--proc-type=auto").unwrap());
         }
@@ -478,12 +470,6 @@ impl MayastorEnvironment {
         if unsafe { spdk_env_dpdk_post_init(false) } != 0 {
             panic!("Failed execute post setup");
         }
-    }
-
-    /// Setup a "stackless thread", which will be our management thread. This
-    /// thread is also used to initiate the shutdown.
-    fn init_main_thread(&self) -> Result<()> {
-        Ok(())
     }
 
     /// initialize the logging subsystem
@@ -538,7 +524,7 @@ impl MayastorEnvironment {
             });
         }
 
-        executor::spawn(async move {
+        Reactor::block_on(async move {
             if let Err(msg) = target::nvmf::init(&address).await {
                 error!("Failed to initialize Mayastor nvmf target: {}", msg);
                 mayastor_env_stop(-1);
@@ -564,10 +550,64 @@ impl MayastorEnvironment {
         Self::target_init().unwrap();
     }
 
+    pub fn init(mut self) -> Self {
+
+        self.read_config_file().unwrap();
+        self.initialize_eal();
+        self.init_logger().unwrap();
+
+        if self.enable_coredump {
+            //TODO
+            warn!("rlimit configuration not implemented");
+        }
+
+        info!(
+            "Total number of cores available: {}",
+            Cores::count().into_iter().count()
+        );
+
+        self.install_signal_handlers().unwrap();
+
+        // allocate a Reactor per core
+        Reactors::init();
+        Cores::count()
+            .into_iter()
+            .for_each(|c| Reactors::launch_remote(c).unwrap());
+
+        info!("START_INIT");
+
+        let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
+        let cfg = self.json_config_file.clone();
+
+        Reactor::block_on(async move {
+            unsafe {
+                if let Some(ref json) = cfg {
+                    info!("Loading JSON configuration file");
+
+                    let jsonfile = CString::new(json.as_str()).unwrap();
+                    spdk_app_json_config_load(
+                        jsonfile.as_ptr(),
+                        rpc.as_ptr(),
+                        Some(Self::start_rpc),
+                        rpc.into_raw() as _,
+                    );
+                } else {
+                    spdk_subsystem_init(
+                        Some(Self::start_rpc),
+                        rpc.into_raw() as _,
+                    );
+                }
+            };
+        });
+
+        self
+    }
+
+
     /// start mayastor and call f when all is setup.
-    pub fn start<F>(&mut self, _f: F) -> Result<i32>
-        where
-            F: FnOnce(),
+    pub fn start<F>(mut self, f: F) -> Result<i32>
+    where
+        F: FnOnce() + 'static,
     {
         self.read_config_file()?;
         self.initialize_eal();
@@ -578,65 +618,55 @@ impl MayastorEnvironment {
             warn!("rlimit configuration not implemented");
         }
 
-        info!("Total number of cores available: {}", unsafe {
-            spdk_env_get_core_count()
-        });
+        info!(
+            "Total number of cores available: {}",
+            Cores::count().into_iter().count()
+        );
 
         self.install_signal_handlers()?;
 
         // allocate a Reactor per core
         Reactors::init();
-        dbg!(Cores::current());
-        // start "poll loop" for all cores except this one
-        Reactors::launch_remote(3).unwrap();
-        // get a handle to the reactor that is running one core 2
-        let r = Reactors::get_by_core(3).unwrap();
-        // get our current core
-        let this_core = Cores::current();
+        Cores::count()
+            .into_iter()
+            .for_each(|c| Reactors::launch_remote(c).unwrap());
 
-        r.send_future(async move {
-            info!("send from core {} to core {}", this_core, Cores::current());
+        info!("START_INIT");
+        let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
+
+        Reactor::block_on(async move {
+            unsafe {
+                if let Some(ref json) = self.json_config_file {
+                    info!("Loading JSON configuration file");
+
+                    let jsonfile = CString::new(json.as_str()).unwrap();
+                    spdk_app_json_config_load(
+                        jsonfile.as_ptr(),
+                        rpc.as_ptr(),
+                        Some(Self::start_rpc),
+                        rpc.into_raw() as _,
+                    );
+                } else {
+                    spdk_subsystem_init(
+                        Some(Self::start_rpc),
+                        rpc.into_raw() as _,
+                    );
+                }
+            };
         });
 
-        r.send_future(async {
-            if let Err(result) = target::nvmf::init("127.0.0.1").await {
-                error!("failed to init target")
-            }
-        });
-
-        info!("message send");
-        std::thread::sleep(Duration::from_secs(1));
-
-        Reactors::iter().for_each(|r|{
-            r.suspend();
-        });
-
-        Reactors::iter().for_each(|r| {
-           println!("{}:{}", r.core(), r.get_sate())
-        });
-
-
-        std::thread::sleep(Duration::from_secs(1));
-
-        Reactors::iter().for_each(|r| r.running());
-
-        info!("all cores at full throttle");
-
-        Reactors::iter().for_each(|r| {
-            println!("{}:{}", r.core(), r.get_sate())
-        });
-
+        let master = Reactors::get_current().unwrap();
+        master.send_future(async{ f()});
         Reactors::launch_master();
 
+        info!("reactors stopped....");
+
+        master.poll_once();
+        unsafe {
+            spdk_env_fini();
+            spdk_log_close();
+        }
+
         Ok(*GLOBAL_RC.lock().unwrap())
-
     }
-}
-
-
-async fn test() {
-    println!(
-        "hoe kan dit joh! hello from {}",
-        crate::core::Cores::current()
-    );
 }

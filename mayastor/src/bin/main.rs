@@ -11,7 +11,6 @@ use mayastor::{
 
 use structopt::StructOpt;
 
-
 mayastor::CPS_INIT!();
 
 fn main() -> Result<(), std::io::Error> {
@@ -39,10 +38,10 @@ fn main() -> Result<(), std::io::Error> {
 
     info!("Starting Mayastor version {}", git_version!());
     info!("free_pages: {} nr_pages: {}", free_pages, nr_pages);
-    let _status = MayastorEnvironment::new(args)
-        .start(|| {
-            info!("Mayastor started {} ({})...", '\u{1F680}', git_version!());
-        })
-        .unwrap();
+    let env = MayastorEnvironment::new(args);
+    env.start(|| {
+        info!("Mayastor started {} ({})...", '\u{1F680}', git_version!());
+    })
+    .unwrap();
     Ok(())
 }

@@ -11,9 +11,8 @@ use mayastor::{
         MayastorCliArgs,
         MayastorEnvironment,
     },
-    executor,
 };
-
+use mayastor::core::{Reactors, Cores, Reactor};
 use mayastor::nexus_uri::{bdev_create, bdev_destroy};
 
 static DISKNAME1: &str = "/tmp/disk1.img";
@@ -36,45 +35,59 @@ fn core() {
     common::truncate_file(DISKNAME1, 64 * 1024);
     common::truncate_file(DISKNAME2, 64 * 1024);
 
-    let mut test_cases: HashMap<&str, TestCase> = HashMap::new();
-    test_cases.insert("open/close", Box::pin(works()));
-    test_cases.insert("multiple open/close", Box::pin(multiple_open()));
-    test_cases.insert("handle tests", Box::pin(handle_test()));
+    let ms = MayastorEnvironment::new(MayastorCliArgs{
+        log_components: vec!["thread".into()],
+        reactor_mask: "0x1".to_string(),
+        ..Default::default()
+    }).init();
 
-    let rc = MayastorEnvironment::new(MayastorCliArgs::default())
-        .start(move || {
-            executor::spawn(async move {
-                for (name, f) in test_cases {
-                    println!("\n\nRunning test: {}", name);
-                    match f.await {
-                        r => println!("\n\n{}.... [{:?}]\n", name, r),
-                    }
-                }
-                mayastor_env_stop(0);
-            })
-        })
-        .unwrap();
 
-    assert_eq!(rc, 0);
+//        .start(|| {
+    let r = Reactors::get_by_core(Cores::first()).unwrap();
+    r.send_future(works());
+    r.poll_once();
+    r.poll_once();
+    r.poll_once();
+    r.poll_once();
 
-    common::compare_files(DISKNAME1, DISKNAME2);
+
+//    });
+
+   // Reactor::block_on(multiple_open());
+   // Reactor::block_on(handle_test());
+
+
+
+//        .start(move || {
+//            Reactors::get_by_core(0).unwrap().send_future(
+//            async move {
+//                for (name, f) in test_cases {
+//                    println!("\n\nRunning test: {}", name);
+//                    match f.await {
+//                        r => println!("\n\n{}.... [{:?}]\n", name, r),
+//                    }
+//                }
+//                mayastor_env_stop(0);
+//            });
+//        })
+//        .unwrap();
+//
+//    assert_eq!(rc, 0);
+
+//    common::compare_files(DISKNAME1, DISKNAME2);
     common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
 }
 
-type TestResult = Result<(), ()>;
-type TestCase = Pin<Box<dyn Future<Output = TestResult>>>;
-
-async fn create_nexus() -> TestResult {
+async fn create_nexus()  {
     let ch = vec![BDEVNAME1.to_string(), BDEVNAME2.to_string()];
-    nexus_create("core_nexus", 64 * 1024 * 1024, None, &ch)
-        .await
-        .expect("failed to crate nexus");
-    Ok(())
+    let _ = nexus_create("core_nexus", 64 * 1024 * 1024, None, &ch)
+        .await.unwrap();
+        //.expect("failed to crate nexus");
 }
 
-async fn works() -> TestResult {
+async fn works() {
     assert_eq!(Bdev::lookup_by_name("core_nexus").is_none(), true);
-    create_nexus().await.expect("failed to create nexus");
+    create_nexus().await;
     let b = Bdev::lookup_by_name("core_nexus").unwrap();
     assert_eq!(b.name(), "core_nexus");
 
@@ -83,13 +96,13 @@ async fn works() -> TestResult {
     drop(channel);
     drop(desc);
 
+
     let n = nexus_lookup("core_nexus").expect("nexus not found");
     n.destroy().await;
-    Ok(())
 }
 
-async fn multiple_open() -> TestResult {
-    create_nexus().await.expect("failed to create nexus");
+async fn multiple_open() {
+    create_nexus().await;
 
     let n = nexus_lookup("core_nexus").expect("failed to lookup nexus");
 
@@ -108,10 +121,9 @@ async fn multiple_open() -> TestResult {
     drop(dbg!(d2));
     n.destroy().await;
 
-    Ok(())
 }
 
-async fn handle_test() -> TestResult {
+async fn handle_test() {
     bdev_create(BDEVNAME1).await.expect("failed to create bdev");
     let hdl2 = BdevHandle::open(BDEVNAME1, true, true)
         .expect("failed to create the handle!");
@@ -126,5 +138,4 @@ async fn handle_test() -> TestResult {
         .await
         .expect("failed to destroy bdev");
 
-    Ok(())
 }

@@ -1,5 +1,10 @@
-use spdk_sys::{spdk_thread, spdk_set_thread, spdk_thread_poll, spdk_thread_create};
 use snafu::Snafu;
+use spdk_sys::{
+    spdk_set_thread,
+    spdk_thread,
+    spdk_thread_create,
+    spdk_thread_poll,
+};
 use std::ffi::CString;
 
 #[derive(Debug, Snafu)]
@@ -8,7 +13,7 @@ pub enum Error {
     InvalidThread {},
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, Copy)]
 /// struct that wraps an SPDK thread. The name thread is chosen poorly and
 /// should not be confused with an actual thread. Consider it more to be
 /// analogous to a container to which you can submit work and poll it to drive
@@ -28,7 +33,8 @@ impl Mthread {
 
     pub fn new(name: String) -> Self {
         let name = CString::new(name).unwrap();
-        let t = unsafe { spdk_thread_create(name.as_ptr(), std::ptr::null_mut()) };
+        let t =
+            unsafe { spdk_thread_create(name.as_ptr(), std::ptr::null_mut()) };
         Self::from_null_checked(t).unwrap()
     }
     ///
@@ -45,7 +51,7 @@ impl Mthread {
         self
     }
 
-    pub fn poll(&self) {
+    pub fn poll(self) {
         let mut done = false;
         while !done {
             let rc = unsafe { spdk_thread_poll(self.0, 0, 0) };

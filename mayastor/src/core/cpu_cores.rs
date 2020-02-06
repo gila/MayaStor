@@ -14,6 +14,7 @@ pub enum Core {
     Last,
 }
 
+#[derive(Debug)]
 pub struct Cores(u32);
 
 impl Cores {

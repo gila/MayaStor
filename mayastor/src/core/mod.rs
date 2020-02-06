@@ -13,6 +13,7 @@ mod uuid;
 
 pub mod event;
 pub use ::uuid::Uuid;
+pub use reactor::{Reactors, Reactor};
 pub use bdev::Bdev;
 pub use channel::IoChannel;
 pub use cpu_cores::{Core, Cores};
@@ -20,10 +21,10 @@ pub use descriptor::Descriptor;
 pub use dma::{DmaBuf, DmaError};
 pub use env::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment};
 pub use handle::BdevHandle;
-pub use reactor::{REACTOR_LIST};
-pub use thread::{Mthread};
 use nix::errno::Errno;
+pub use reactor::REACTOR_LIST;
 use snafu::Snafu;
+pub use thread::Mthread;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility = "pub")]

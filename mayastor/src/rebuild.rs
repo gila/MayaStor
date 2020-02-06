@@ -9,9 +9,7 @@ use snafu::Snafu;
 use spdk_sys::spdk_bdev_io;
 
 use crate::{
-    bdev::nexus::{
-        nexus_bdev::{nexus_lookup, NexusState},
-    },
+    bdev::nexus::nexus_bdev::{nexus_lookup, NexusState},
     core::{Descriptor, DmaBuf, DmaError},
     poller::{register_poller, PollTask},
 };
@@ -51,7 +49,6 @@ pub enum RebuildState {
     /// Suspended
     Suspended,
 }
-
 
 /// struct that holds the state of a copy task. This struct
 /// is used during rebuild.
@@ -143,7 +140,8 @@ impl RebuildTask {
         _io: *mut spdk_bdev_io,
         _success: bool,
         _ctx: *mut c_void,
-    ) { unimplemented!();
+    ) {
+        unimplemented!();
     }
 
     /// function called when the rebuild has completed. We record something in
