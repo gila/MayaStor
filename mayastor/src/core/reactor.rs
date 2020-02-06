@@ -14,6 +14,7 @@ use std::{
 use spdk_sys::{
     spdk_env_thread_launch_pinned,
     spdk_env_thread_wait_all,
+    spdk_get_thread,
     spdk_ring,
     spdk_set_thread,
     spdk_thread_create,
@@ -194,9 +195,9 @@ impl Reactor {
 
     /// spawn a future locally on this core
     fn spawn_local<F, R>(&self, future: F) -> async_task::JoinHandle<R, ()>
-        where
-            F: Future<Output=R> + 'static,
-            R: 'static,
+    where
+        F: Future<Output = R> + 'static,
+        R: 'static,
     {
         let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
         let (task, handle) = async_task::spawn_local(future, schedule, ());
@@ -242,9 +243,17 @@ impl Reactor {
     where
         F: Future<Output = ()> + 'static,
     {
-        let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-        let (task, _) = async_task::spawn_local(future, schedule, ());
-        Reactors::get_current().unwrap().with(|| task.run());
+        Reactors::get_current().unwrap().with(|| {
+            let thread = unsafe { spdk_get_thread() };
+
+            dbg!(thread);
+            let thread = unsafe { spdk_get_thread() };
+
+            dbg!(thread);
+            let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
+            let (task, _) = async_task::spawn_local(future, schedule, ());
+            task.run();
+        });
     }
 
     /// set the state of this reactor
@@ -323,9 +332,9 @@ impl Reactor {
 
         // if there are any other threads poll them now skipping thread 0 as it
         // has been polled already running the futures
-//        self.threads.iter().skip(1).for_each(|t| {
-//            t.poll();
-//        });
+        //        self.threads.iter().skip(1).for_each(|t| {
+        //            t.poll();
+        //        });
     }
 }
 

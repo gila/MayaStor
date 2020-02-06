@@ -8,12 +8,15 @@ use mayastor::{
         mayastor_env_stop,
         Bdev,
         BdevHandle,
+        Cores,
         MayastorCliArgs,
         MayastorEnvironment,
+        Reactor,
+        Reactors,
     },
+    nexus_uri::{bdev_create, bdev_destroy},
 };
-use mayastor::core::{Reactors, Cores, Reactor};
-use mayastor::nexus_uri::{bdev_create, bdev_destroy};
+use spdk_sys::spdk_get_thread;
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -35,54 +38,63 @@ fn core() {
     common::truncate_file(DISKNAME1, 64 * 1024);
     common::truncate_file(DISKNAME2, 64 * 1024);
 
-    let ms = MayastorEnvironment::new(MayastorCliArgs{
-        log_components: vec!["thread".into()],
+    let ms = MayastorEnvironment::new(MayastorCliArgs {
+        //log_components: vec!["thread".into()],
         reactor_mask: "0x1".to_string(),
         ..Default::default()
-    }).init();
+    })
+    .init();
 
-
-//        .start(|| {
+    //        .start(|| {
     let r = Reactors::get_by_core(Cores::first()).unwrap();
-    r.send_future(works());
-    r.poll_once();
-    r.poll_once();
-    r.poll_once();
-    r.poll_once();
 
+    r.with(|| {
+        let thread = unsafe { spdk_get_thread() };
+        dbg!(thread);
+    });
 
-//    });
+    r.with(|| {
+        Reactor::block_on(works());
+    });
 
-   // Reactor::block_on(multiple_open());
-   // Reactor::block_on(handle_test());
+    loop {
+        r.poll_once();
+        if r.get_sate() == 1 << 3 {
+            break;
+        }
+    }
 
+    //    });
 
+    // Reactor::block_on(multiple_open());
+    // Reactor::block_on(handle_test());
 
-//        .start(move || {
-//            Reactors::get_by_core(0).unwrap().send_future(
-//            async move {
-//                for (name, f) in test_cases {
-//                    println!("\n\nRunning test: {}", name);
-//                    match f.await {
-//                        r => println!("\n\n{}.... [{:?}]\n", name, r),
-//                    }
-//                }
-//                mayastor_env_stop(0);
-//            });
-//        })
-//        .unwrap();
-//
-//    assert_eq!(rc, 0);
+    //        .start(move || {
+    //            Reactors::get_by_core(0).unwrap().send_future(
+    //            async move {
+    //                for (name, f) in test_cases {
+    //                    println!("\n\nRunning test: {}", name);
+    //                    match f.await {
+    //                        r => println!("\n\n{}.... [{:?}]\n", name, r),
+    //                    }
+    //                }
+    //                mayastor_env_stop(0);
+    //            });
+    //        })
+    //        .unwrap();
+    //
+    //    assert_eq!(rc, 0);
 
-//    common::compare_files(DISKNAME1, DISKNAME2);
+    //    common::compare_files(DISKNAME1, DISKNAME2);
     common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
 }
 
-async fn create_nexus()  {
+async fn create_nexus() {
     let ch = vec![BDEVNAME1.to_string(), BDEVNAME2.to_string()];
     let _ = nexus_create("core_nexus", 64 * 1024 * 1024, None, &ch)
-        .await.unwrap();
-        //.expect("failed to crate nexus");
+        .await
+        .unwrap();
+    //.expect("failed to crate nexus");
 }
 
 async fn works() {
@@ -95,7 +107,6 @@ async fn works() {
     let channel = desc.get_channel().expect("failed to get IO channel");
     drop(channel);
     drop(desc);
-
 
     let n = nexus_lookup("core_nexus").expect("nexus not found");
     n.destroy().await;
@@ -120,7 +131,6 @@ async fn multiple_open() {
     drop(dbg!(d1));
     drop(dbg!(d2));
     n.destroy().await;
-
 }
 
 async fn handle_test() {
@@ -137,5 +147,4 @@ async fn handle_test() {
     bdev_destroy(BDEVNAME1)
         .await
         .expect("failed to destroy bdev");
-
 }

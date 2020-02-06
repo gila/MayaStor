@@ -271,9 +271,11 @@ async fn _mayastor_shutdown_cb(arg: *mut c_void) {
 
 /// main shutdown routine for mayastor
 pub fn mayastor_env_stop(rc: i32) {
-    Reactors::get_by_core(0).unwrap().send_future( async move {
-        _mayastor_shutdown_cb(rc as *const i32 as *mut c_void).await;
-    });
+    Reactors::get_by_core(Cores::first())
+        .unwrap()
+        .send_future(async move {
+            _mayastor_shutdown_cb(rc as *const i32 as *mut c_void).await;
+        });
 }
 
 /// called on SIGINT and SIGTERM
@@ -281,9 +283,11 @@ extern "C" fn mayastor_signal_handler(signo: i32) {
     warn!("Received SIGNO: {}", signo);
     // we don't differentiate between signal numbers for now, all signals will
     // cause a shutdown
-    Reactors::get_current().unwrap().send_future(async move {
-        _mayastor_shutdown_cb(signo as *const i32 as *mut c_void).await;
-    });
+    Reactors::get_by_core(Cores::first())
+        .unwrap()
+        .send_future(async move {
+            _mayastor_shutdown_cb(signo as *const i32 as *mut c_void).await;
+        });
 }
 
 impl MayastorEnvironment {
@@ -551,7 +555,6 @@ impl MayastorEnvironment {
     }
 
     pub fn init(mut self) -> Self {
-
         self.read_config_file().unwrap();
         self.initialize_eal();
         self.init_logger().unwrap();
@@ -602,7 +605,6 @@ impl MayastorEnvironment {
 
         self
     }
-
 
     /// start mayastor and call f when all is setup.
     pub fn start<F>(mut self, f: F) -> Result<i32>
@@ -656,7 +658,7 @@ impl MayastorEnvironment {
         });
 
         let master = Reactors::get_current().unwrap();
-        master.send_future(async{ f()});
+        master.send_future(async { f() });
         Reactors::launch_master();
 
         info!("reactors stopped....");
