@@ -1,7 +1,6 @@
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::Future;
 use log::info;
-use once_cell::sync::OnceCell;
 use std::{
     borrow::Borrow,
     ffi::CString,
@@ -24,21 +23,22 @@ use spdk_sys::{
 
 use crate::core::{Cores, Mthread};
 use std::{cell::Cell, time::Duration};
+use once_cell::sync::OnceCell;
 
 pub(crate) const INIT: usize = 1 << 1;
-pub(crate) const POLLING: usize = 1 << 2;
+pub(crate) const RUNNING: usize = 1 << 2;
 pub(crate) const SHUTDOWN: usize = 1 << 3;
 pub(crate) const SUSPEND: usize = 1 << 4;
 pub(crate) const DEVELOPER_DELAY: usize = 1 << 5;
 
 #[derive(Debug)]
-pub struct Reactors(pub Vec<Reactor>);
+pub struct Reactors( Vec<Reactor>);
 
 unsafe impl Sync for Reactors {}
 unsafe impl Send for Reactors {}
 
 pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
-
+pub static mut MASTER_CORE_STOPPED: bool = false;
 #[repr(C, align(64))]
 #[derive(Debug)]
 pub struct Reactor {
@@ -239,27 +239,24 @@ impl Reactor {
     }
 
     /// spawn a future locally on the current core and await its completion
-    pub fn block_on<F>(future: F)
+    pub fn block_on<F,R>(future: F) -> async_task::JoinHandle<R,()>
     where
-        F: Future<Output = ()> + 'static,
+        F: Future<Output = R> + 'static,
+        R: 'static,
     {
-        Reactors::get_current().unwrap().with(|| {
-            let thread = unsafe { spdk_get_thread() };
-
-            dbg!(thread);
-            let thread = unsafe { spdk_get_thread() };
-
-            dbg!(thread);
             let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-            let (task, _) = async_task::spawn_local(future, schedule, ());
-            task.run();
-        });
+            let (task, handle) = async_task::spawn_local(future, schedule, ());
+            Reactors::get_current().unwrap().with(|| {
+                task.run();
+            });
+            handle
     }
+
 
     /// set the state of this reactor
     fn set_state(&self, state: usize) {
         match state {
-            SUSPEND | POLLING | SHUTDOWN | DEVELOPER_DELAY => {
+            SUSPEND | RUNNING | SHUTDOWN | DEVELOPER_DELAY => {
                 self.flags.set(state)
             }
             _ => panic!("Invalid state"),
@@ -276,7 +273,7 @@ impl Reactor {
     /// poll for work on the thread message pools as well as its own queue
     /// to launch futures.
     pub fn running(&self) {
-        self.set_state(POLLING)
+        self.set_state(RUNNING)
     }
 
     pub fn developer_delayed(&self) {
@@ -304,19 +301,29 @@ impl Reactor {
             match self.flags.get() {
                 SUSPEND => {
                     std::thread::sleep(Duration::from_millis(100));
-                }
-                POLLING => {
+                },
+                RUNNING => {
                     self.poll_once();
-                }
+                },
                 SHUTDOWN => {
                     info!("reactor {} shutdown requested", self.lcore);
                     break;
-                }
+                },
                 DEVELOPER_DELAY => {
                     std::thread::sleep(Duration::from_millis(1));
                     self.poll_once();
                 }
                 _ => panic!("invalid reactor state {}", self.flags.get()),
+            }
+        }
+
+        debug!("initiating shutdown");
+        // clean up the threads
+        self.threads.iter().for_each(|t| t.destroy());
+
+        if self.lcore == Cores::first() {
+            unsafe {
+                MASTER_CORE_STOPPED = true;
             }
         }
 
@@ -337,7 +344,8 @@ impl Reactor {
         });
     }
 }
-
 impl Drop for Reactor {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        info!("dropping {:?}", self);
+    }
 }

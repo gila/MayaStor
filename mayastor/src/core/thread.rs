@@ -1,10 +1,5 @@
 use snafu::Snafu;
-use spdk_sys::{
-    spdk_set_thread,
-    spdk_thread,
-    spdk_thread_create,
-    spdk_thread_poll,
-};
+use spdk_sys::{spdk_set_thread, spdk_thread, spdk_thread_create, spdk_thread_poll, spdk_thread_exit, spdk_thread_destroy};
 use std::ffi::CString;
 
 #[derive(Debug, Snafu)]
@@ -59,6 +54,13 @@ impl Mthread {
                 done = true
             }
         }
+    }
+
+    pub fn destroy(self) {
+        debug!("destroying thread...");
+        unsafe { spdk_set_thread(self.0) };
+        unsafe { spdk_thread_exit(self.0)};
+        unsafe { spdk_thread_destroy(self.0)};
     }
 
     pub fn inner(self) -> *const spdk_thread {

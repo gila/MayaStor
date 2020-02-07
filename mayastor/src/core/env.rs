@@ -59,6 +59,7 @@ use crate::{
 use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
+use crate::core::reactor::MASTER_CORE_STOPPED;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -131,12 +132,10 @@ impl Default for MayastorCliArgs {
     }
 }
 
-static INIT_THREAD: OnceCell<Mthread> = OnceCell::new();
 /// Global exit code of the program, initially set to -1 to capture double
 /// shutdown during test cases
 pub static GLOBAL_RC: Lazy<Arc<Mutex<i32>>> =
     Lazy::new(|| Arc::new(Mutex::new(-1)));
-
 /// FFI functions that are needed to initialize the environment
 extern "C" {
     pub fn rte_eal_init(argc: i32, argv: *mut *mut libc::c_char) -> i32;
@@ -241,6 +240,18 @@ impl Default for MayastorEnvironment {
 /// The actual routine which does the mayastor shutdown.
 /// Must be called on the same thread which did the init.
 async fn _mayastor_shutdown_cb(arg: *mut c_void) {
+
+    extern "C" fn reactors_stop(arg: *mut c_void) {
+        Reactors::iter().for_each(|r| r.shutdown());
+
+        loop {
+            if unsafe { MASTER_CORE_STOPPED } {
+                let mut r = REACTOR_LIST.get().unwrap();
+              //  r.0.clear();
+            }
+        }
+    }
+
     let rc = arg as i32;
 
     if rc != 0 {
@@ -264,9 +275,12 @@ async fn _mayastor_shutdown_cb(arg: *mut c_void) {
         }
     };
     f.await;
-
     info!("targets down");
-    Reactors::iter().for_each(|r| r.shutdown());
+
+    unsafe { spdk_rpc_finish();
+        spdk_subsystem_fini(Some(reactors_stop), std::ptr::null_mut());
+
+    }
 }
 
 /// main shutdown routine for mayastor
@@ -283,11 +297,7 @@ extern "C" fn mayastor_signal_handler(signo: i32) {
     warn!("Received SIGNO: {}", signo);
     // we don't differentiate between signal numbers for now, all signals will
     // cause a shutdown
-    Reactors::get_by_core(Cores::first())
-        .unwrap()
-        .send_future(async move {
-            _mayastor_shutdown_cb(signo as *const i32 as *mut c_void).await;
-        });
+    mayastor_env_stop(0);
 }
 
 impl MayastorEnvironment {
@@ -663,7 +673,6 @@ impl MayastorEnvironment {
 
         info!("reactors stopped....");
 
-        master.poll_once();
         unsafe {
             spdk_env_fini();
             spdk_log_close();

@@ -39,53 +39,19 @@ fn core() {
     common::truncate_file(DISKNAME2, 64 * 1024);
 
     let ms = MayastorEnvironment::new(MayastorCliArgs {
-        //log_components: vec!["thread".into()],
+        log_components: vec!["nvmf".into()],
         reactor_mask: "0x1".to_string(),
         ..Default::default()
-    })
-    .init();
+    }).start(|| {
+        let r = Reactors::get_by_core(Cores::first()).unwrap();
 
-    //        .start(|| {
-    let r = Reactors::get_by_core(Cores::first()).unwrap();
+        r.with(|| {
+            let h = Reactor::block_on(works());
+        });
 
-    r.with(|| {
-        let thread = unsafe { spdk_get_thread() };
-        dbg!(thread);
+        mayastor_env_stop(0);
     });
 
-    r.with(|| {
-        Reactor::block_on(works());
-    });
-
-    loop {
-        r.poll_once();
-        if r.get_sate() == 1 << 3 {
-            break;
-        }
-    }
-
-    //    });
-
-    // Reactor::block_on(multiple_open());
-    // Reactor::block_on(handle_test());
-
-    //        .start(move || {
-    //            Reactors::get_by_core(0).unwrap().send_future(
-    //            async move {
-    //                for (name, f) in test_cases {
-    //                    println!("\n\nRunning test: {}", name);
-    //                    match f.await {
-    //                        r => println!("\n\n{}.... [{:?}]\n", name, r),
-    //                    }
-    //                }
-    //                mayastor_env_stop(0);
-    //            });
-    //        })
-    //        .unwrap();
-    //
-    //    assert_eq!(rc, 0);
-
-    //    common::compare_files(DISKNAME1, DISKNAME2);
     common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
 }
 
