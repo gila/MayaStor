@@ -38,6 +38,7 @@ use spdk_sys::{
     spdk_pci_addr,
     spdk_rpc_set_state,
     spdk_thread_create,
+    spdk_thread_lib_fini,
     SPDK_LOG_DEBUG,
     SPDK_LOG_INFO,
     SPDK_RPC_RUNTIME,
@@ -45,7 +46,7 @@ use spdk_sys::{
 
 use crate::{
     core::{
-        reactor::{Reactor, Reactors},
+        reactor::{Reactor, Reactors, MASTER_CORE_STOPPED},
         Cores,
         Mthread,
         REACTOR_LIST,
@@ -59,7 +60,6 @@ use crate::{
 use byte_unit::{Byte, ByteUnit};
 use std::time::Duration;
 use structopt::StructOpt;
-use crate::core::reactor::MASTER_CORE_STOPPED;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -145,6 +145,7 @@ extern "C" {
         cb: Option<extern "C" fn(i32, *mut c_void)>,
         args: *mut c_void,
     );
+    pub fn spdk_trace_cleanup();
     pub fn spdk_env_dpdk_post_init(legacy_mem: bool) -> i32;
     pub fn spdk_env_fini();
     pub fn spdk_log_close();
@@ -220,7 +221,7 @@ impl Default for MayastorEnvironment {
             mem_size: -1,
             name: "mayastor".into(),
             no_pci: false,
-            num_entries: 32 * 1024,
+            num_entries: 0,
             num_pci_addr: 0,
             pci_blacklist: vec![],
             pci_whitelist: vec![],
@@ -231,7 +232,7 @@ impl Default for MayastorEnvironment {
             shm_id: -1,
             shutdown_cb: None,
             tpoint_group_mask: String::new(),
-            unlink_hugepage: false,
+            unlink_hugepage: true,
             log_component: vec![],
         }
     }
@@ -240,16 +241,8 @@ impl Default for MayastorEnvironment {
 /// The actual routine which does the mayastor shutdown.
 /// Must be called on the same thread which did the init.
 async fn _mayastor_shutdown_cb(arg: *mut c_void) {
-
     extern "C" fn reactors_stop(arg: *mut c_void) {
         Reactors::iter().for_each(|r| r.shutdown());
-
-        loop {
-            if unsafe { MASTER_CORE_STOPPED } {
-                let mut r = REACTOR_LIST.get().unwrap();
-              //  r.0.clear();
-            }
-        }
     }
 
     let rc = arg as i32;
@@ -277,9 +270,9 @@ async fn _mayastor_shutdown_cb(arg: *mut c_void) {
     f.await;
     info!("targets down");
 
-    unsafe { spdk_rpc_finish();
+    unsafe {
+        spdk_rpc_finish();
         spdk_subsystem_fini(Some(reactors_stop), std::ptr::null_mut());
-
     }
 }
 
@@ -392,13 +385,6 @@ impl MayastorEnvironment {
             );
         }
 
-        if self.master_core > 0 {
-            args.push(
-                CString::new(format!("--master-lcore={}", self.master_core))
-                    .unwrap(),
-            );
-        }
-
         if self.shm_id < 0 {
             args.push(CString::new("--no-shconf").unwrap());
         }
@@ -449,6 +435,10 @@ impl MayastorEnvironment {
                 .unwrap(),
             );
             args.push(CString::new("--proc-type=auto").unwrap());
+        }
+
+        if self.unlink_hugepage {
+            args.push(CString::new("--huge-unlink".to_string()).unwrap());
         }
 
         // set the log levels of the DPDK libs, this can be overridden by
@@ -538,12 +528,14 @@ impl MayastorEnvironment {
             });
         }
 
-        Reactor::block_on(async move {
+        let f = async move {
             if let Err(msg) = target::nvmf::init(&address).await {
                 error!("Failed to initialize Mayastor nvmf target: {}", msg);
                 mayastor_env_stop(-1);
             }
-        });
+        };
+
+        Reactors::current().unwrap().send_future(f);
 
         Ok(())
     }
@@ -610,73 +602,64 @@ impl MayastorEnvironment {
                         rpc.into_raw() as _,
                     );
                 }
-            };
+            }
         });
 
         self
     }
 
+    fn fini() {
+        unsafe {
+            spdk_trace_cleanup();
+            spdk_thread_lib_fini();
+            spdk_env_fini();
+            spdk_log_close();
+        }
+    }
+
     /// start mayastor and call f when all is setup.
-    pub fn start<F>(mut self, f: F) -> Result<i32>
+    pub fn start<F>(self, f: F) -> Result<i32>
     where
         F: FnOnce() + 'static,
     {
-        self.read_config_file()?;
-        self.initialize_eal();
-        self.init_logger()?;
+        self.init();
 
-        if self.enable_coredump {
-            //TODO
-            warn!("rlimit configuration not implemented");
-        }
+        //        // allocate a Reactor per core
+        //        Reactors::init();
+        //        Cores::count()
+        //            .into_iter()
+        //            .for_each(|c| Reactors::launch_remote(c).unwrap());
+        //
+        //        info!("START_INIT");
+        //        let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
+        //
+        //        Reactor::block_on(async move {
+        //            unsafe {
+        //                if let Some(ref json) = self.json_config_file {
+        //                    info!("Loading JSON configuration file");
+        //
+        //                    let jsonfile =
+        // CString::new(json.as_str()).unwrap();
+        // spdk_app_json_config_load(
+        // jsonfile.as_ptr(),                        rpc.as_ptr(),
+        //                        Some(Self::start_rpc),
+        //                        rpc.into_raw() as _,
+        //                    );
+        //                } else {
+        //                    spdk_subsystem_init(
+        //                        Some(Self::start_rpc),
+        //                        rpc.into_raw() as _,
+        //                    );
+        //                }
+        //            };
+        //        });
 
-        info!(
-            "Total number of cores available: {}",
-            Cores::count().into_iter().count()
-        );
-
-        self.install_signal_handlers()?;
-
-        // allocate a Reactor per core
-        Reactors::init();
-        Cores::count()
-            .into_iter()
-            .for_each(|c| Reactors::launch_remote(c).unwrap());
-
-        info!("START_INIT");
-        let rpc = CString::new(self.rpc_addr.as_str()).unwrap();
-
-        Reactor::block_on(async move {
-            unsafe {
-                if let Some(ref json) = self.json_config_file {
-                    info!("Loading JSON configuration file");
-
-                    let jsonfile = CString::new(json.as_str()).unwrap();
-                    spdk_app_json_config_load(
-                        jsonfile.as_ptr(),
-                        rpc.as_ptr(),
-                        Some(Self::start_rpc),
-                        rpc.into_raw() as _,
-                    );
-                } else {
-                    spdk_subsystem_init(
-                        Some(Self::start_rpc),
-                        rpc.into_raw() as _,
-                    );
-                }
-            };
-        });
-
-        let master = Reactors::get_current().unwrap();
+        let master = Reactors::current().unwrap();
         master.send_future(async { f() });
         Reactors::launch_master();
 
         info!("reactors stopped....");
-
-        unsafe {
-            spdk_env_fini();
-            spdk_log_close();
-        }
+        Self::fini();
 
         Ok(*GLOBAL_RC.lock().unwrap())
     }

@@ -1,5 +1,12 @@
 use snafu::Snafu;
-use spdk_sys::{spdk_set_thread, spdk_thread, spdk_thread_create, spdk_thread_poll, spdk_thread_exit, spdk_thread_destroy};
+use spdk_sys::{
+    spdk_set_thread,
+    spdk_thread,
+    spdk_thread_create,
+    spdk_thread_destroy,
+    spdk_thread_exit,
+    spdk_thread_poll,
+};
 use std::ffi::CString;
 
 #[derive(Debug, Snafu)]
@@ -39,14 +46,16 @@ impl Mthread {
     /// long-running functions in general follow the nodejs event loop
     /// model, and you should be good.
     pub fn with<F: FnOnce()>(self, f: F) -> Self {
-        unsafe { spdk_set_thread(self.0) };
+        //assert_eq!(unsafe {spdk_sys::spdk_get_thread()},
+        // std::ptr::null_mut());
+        self.enter();
         f();
         self.poll();
-        unsafe { spdk_set_thread(std::ptr::null_mut()) };
+        self.exit();
         self
     }
 
-    pub fn poll(self) {
+    pub fn poll(self) -> Self {
         let mut done = false;
         while !done {
             let rc = unsafe { spdk_thread_poll(self.0, 0, 0) };
@@ -54,13 +63,25 @@ impl Mthread {
                 done = true
             }
         }
+        self
+    }
+
+    #[inline]
+    pub fn enter(self) -> Self {
+        unsafe { spdk_set_thread(self.0) };
+        self
+    }
+
+    #[inline]
+    pub fn exit(self) {
+        unsafe { spdk_set_thread(std::ptr::null_mut()) };
     }
 
     pub fn destroy(self) {
         debug!("destroying thread...");
         unsafe { spdk_set_thread(self.0) };
-        unsafe { spdk_thread_exit(self.0)};
-        unsafe { spdk_thread_destroy(self.0)};
+        unsafe { spdk_thread_exit(self.0) };
+        unsafe { spdk_thread_destroy(self.0) };
     }
 
     pub fn inner(self) -> *const spdk_thread {

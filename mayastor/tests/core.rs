@@ -1,7 +1,3 @@
-use std::{collections::HashMap, pin::Pin};
-
-use futures::Future;
-
 use mayastor::{
     bdev::{nexus_create, nexus_lookup},
     core::{
@@ -16,7 +12,7 @@ use mayastor::{
     },
     nexus_uri::{bdev_create, bdev_destroy},
 };
-use spdk_sys::spdk_get_thread;
+use once_cell::sync::{Lazy, OnceCell};
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -26,31 +22,28 @@ static BDEVNAME2: &str = "aio:///tmp/disk2.img?blk_size=512";
 
 pub mod common;
 
-#[derive(Debug, PartialEq)]
-pub enum Test {
-    Pass,
-    Fail,
-}
+static MS: OnceCell<MayastorEnvironment> = OnceCell::new();
 
 #[test]
 fn core() {
     common::mayastor_test_init();
-    common::truncate_file(DISKNAME1, 64 * 1024);
-    common::truncate_file(DISKNAME2, 64 * 1024);
-
     let ms = MayastorEnvironment::new(MayastorCliArgs {
         log_components: vec!["nvmf".into()],
         reactor_mask: "0x1".to_string(),
         ..Default::default()
-    }).start(|| {
-        let r = Reactors::get_by_core(Cores::first()).unwrap();
+    })
+    .init();
 
-        r.with(|| {
-            let h = Reactor::block_on(works());
-        });
+    common::truncate_file(DISKNAME1, 64 * 1024);
+    common::truncate_file(DISKNAME2, 64 * 1024);
 
-        mayastor_env_stop(0);
+    let r = Reactors::get_by_core(Cores::first()).unwrap();
+    Reactor::block_on(async {
+        works().await;
     });
+
+    mayastor_env_stop(0);
+    //    });
 
     common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
 }

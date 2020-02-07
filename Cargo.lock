@@ -407,6 +407,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-sync"
+version = "0.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f901f6110b99fdcf0825d0f35e5e26b7ae222ed0d6f2a07c595043e7d5b9429"
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,6 +983,7 @@ dependencies = [
  "clap",
  "crc",
  "crossbeam",
+ "crossbeam-sync",
  "env_logger 0.7.1",
  "futures",
  "futures-timer",
@@ -986,6 +993,7 @@ dependencies = [
  "log",
  "nix 0.16.1",
  "once_cell",
+ "pin-utils",
  "rpc",
  "run_script",
  "serde",

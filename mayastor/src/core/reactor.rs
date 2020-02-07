@@ -2,8 +2,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::Future;
 use log::info;
 use std::{
-    borrow::Borrow,
-    ffi::CString,
+    cell::RefCell,
     os::raw::c_void,
     pin::Pin,
     slice::Iter,
@@ -13,7 +12,6 @@ use std::{
 use spdk_sys::{
     spdk_env_thread_launch_pinned,
     spdk_env_thread_wait_all,
-    spdk_get_thread,
     spdk_ring,
     spdk_set_thread,
     spdk_thread_create,
@@ -22,9 +20,10 @@ use spdk_sys::{
 };
 
 use crate::core::{Cores, Mthread};
-use std::{cell::Cell, time::Duration};
+use crossbeam::sync::Parker;
+use futures::task::{Context, Poll, Waker};
 use once_cell::sync::OnceCell;
-
+use std::{cell::Cell, time::Duration};
 pub(crate) const INIT: usize = 1 << 1;
 pub(crate) const RUNNING: usize = 1 << 2;
 pub(crate) const SHUTDOWN: usize = 1 << 3;
@@ -32,7 +31,7 @@ pub(crate) const SUSPEND: usize = 1 << 4;
 pub(crate) const DEVELOPER_DELAY: usize = 1 << 5;
 
 #[derive(Debug)]
-pub struct Reactors( Vec<Reactor>);
+pub struct Reactors(Vec<Reactor>);
 
 unsafe impl Sync for Reactors {}
 unsafe impl Send for Reactors {}
@@ -84,7 +83,9 @@ impl Reactors {
         unsafe { spdk_env_thread_wait_all() };
     }
 
-    /// start polling the reactor on the given core
+    /// start polling the reactors on the given core, when multiple cores are
+    /// involved they must be running during init to process any incomming
+    /// messages
     pub fn launch_remote(core: u32) -> Result<(), ()> {
         // the master core -- who is the only core that can call this function
         // should not be launched this way. For that use
@@ -116,7 +117,7 @@ impl Reactors {
     }
 
     /// get a reference to a reactor on the current core
-    pub fn get_current() -> Option<&'static Reactor> {
+    pub fn current() -> Option<&'static Reactor> {
         Self::get_by_core(Cores::current())
     }
 
@@ -167,12 +168,6 @@ impl Reactor {
         0
     }
 
-    pub fn with<F: FnOnce()>(&self, f: F) {
-        self.threads[0].with(|| {
-            f();
-        });
-    }
-
     /// run the futures received on the channel
     fn run_futures(&self) {
         QUEUE.with(|(_, r)| r.try_iter().for_each(|f| f.run()))
@@ -205,53 +200,39 @@ impl Reactor {
         handle
     }
 
-    /// in effect the same as send_message except these use the rte_ring
-    /// subsystem. It should be faster compared to the send_message()
-    /// counter part as it has pre allocated structures.
-    ///
-    /// Note that there is no return type here as you cannot await the futures
-    /// cross core, which is intentional.
-    pub fn spawn_self2<F>(&self, f: F)
-    where
-        F: Future<Output = ()> + 'static,
-    {
-        extern "C" fn unwrap<F>(args: *mut c_void)
-        where
-            F: Future<Output = ()> + 'static,
-        {
-            let f: Box<F> = unsafe { Box::from_raw(args as *mut F) };
-            let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-            let (task, _handle) = async_task::spawn_local(*f, schedule, ());
-            task.schedule();
-        }
-
-        let ptr = Box::into_raw(Box::new(f)) as *mut c_void;
-        let e = unsafe {
-            spdk_thread_send_msg(self.threads[0].0, Some(unwrap::<F>), ptr)
-        };
-
-        if e != 0 {
-            error!("failed to dispatch future to mem pool");
-            unsafe {
-                Box::from_raw(ptr);
-            }
-        }
-    }
-
-    /// spawn a future locally on the current core and await its completion
-    pub fn block_on<F,R>(future: F) -> async_task::JoinHandle<R,()>
+    /// spawn a future locally on the current core block until the future is
+    /// completed
+    pub fn block_on<F, R>(future: F) -> Option<R>
     where
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-            let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-            let (task, handle) = async_task::spawn_local(future, schedule, ());
-            Reactors::get_current().unwrap().with(|| {
-                task.run();
-            });
-            handle
-    }
+        let reactor = Reactors::current().unwrap();
+        //reactor.thread_enter();
+        let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
+        let (task, handle) = async_task::spawn_local(future, schedule, ());
 
+        let cx = handle.waker();
+        let cx = &mut Context::from_waker(&cx);
+
+        pin_utils::pin_mut!(handle);
+        task.schedule();
+        //reactor.thread_exit();
+        loop {
+            match handle.as_mut().poll(cx) {
+                Poll::Ready(output) => {
+                    //reactor.thread_exit();
+                    return output;
+                }
+                Poll::Pending => {
+                    reactor.receive_futures();
+                    reactor.threads[0].with(|| {
+                        reactor.run_futures();
+                    });
+                }
+            }
+        }
+    }
 
     /// set the state of this reactor
     fn set_state(&self, state: usize) {
@@ -301,14 +282,14 @@ impl Reactor {
             match self.flags.get() {
                 SUSPEND => {
                     std::thread::sleep(Duration::from_millis(100));
-                },
+                }
                 RUNNING => {
                     self.poll_once();
-                },
+                }
                 SHUTDOWN => {
                     info!("reactor {} shutdown requested", self.lcore);
                     break;
-                },
+                }
                 DEVELOPER_DELAY => {
                     std::thread::sleep(Duration::from_millis(1));
                     self.poll_once();
@@ -330,8 +311,31 @@ impl Reactor {
         debug!("poll loop exit")
     }
 
+    /// set the proper SPDK context before executing
+    fn thread_enter(&self) {
+        self.threads[0].enter();
+    }
+
+    /// unset the above context
+    fn thread_exit(&self) {
+        self.threads[0].exit();
+    }
+
+    /// execute f within a thread context
+    pub fn on_thread<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.thread_enter();
+        let r = f();
+        self.thread_exit();
+        r
+    }
+
     /// polls the reactor only once for any work regardless of its state
     pub fn poll_once(&self) {
+        // assert_eq!(unsafe {spdk_sys::spdk_get_thread()},
+        // std::ptr::null_mut());
         self.receive_futures();
         self.threads[0].with(|| {
             self.run_futures();
@@ -340,7 +344,7 @@ impl Reactor {
         // if there are any other threads poll them now skipping thread 0 as it
         // has been polled already running the futures
         self.threads.iter().skip(1).for_each(|t| {
-            t.poll();
+            t.enter().poll().exit();
         });
     }
 }
