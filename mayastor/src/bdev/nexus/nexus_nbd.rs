@@ -41,8 +41,7 @@ async fn wait_until_ready(path: &str) -> Result<(), ()> {
     let device_size: u32 = 0;
     // each iteration sleeps 100ms => total time out is 10s
     for _i in 1i32 .. 100 {
-        Delay::new(Duration::from_millis(100)).await;
-
+        std::thread::sleep_ms(100);
         let f = OpenOptions::new().read(true).open(Path::new(&path));
         if f.is_err() {
             trace!("Failed to open nbd device {}, retrying ...", path);

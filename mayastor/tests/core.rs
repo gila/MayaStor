@@ -24,36 +24,31 @@ pub mod common;
 
 static MS: OnceCell<MayastorEnvironment> = OnceCell::new();
 
-#[test]
-fn core() {
-    common::mayastor_test_init();
-    let ms = MayastorEnvironment::new(MayastorCliArgs {
-        log_components: vec!["nvmf".into()],
-        reactor_mask: "0x1".to_string(),
-        ..Default::default()
-    })
-    .init();
-
-    common::truncate_file(DISKNAME1, 64 * 1024);
-    common::truncate_file(DISKNAME2, 64 * 1024);
-
-    let r = Reactors::get_by_core(Cores::first()).unwrap();
-    Reactor::block_on(async {
-        works().await;
-    });
-
-    mayastor_env_stop(0);
-    //    });
-
-    common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
-}
-
 async fn create_nexus() {
     let ch = vec![BDEVNAME1.to_string(), BDEVNAME2.to_string()];
     let _ = nexus_create("core_nexus", 64 * 1024 * 1024, None, &ch)
         .await
         .unwrap();
-    //.expect("failed to crate nexus");
+}
+
+#[test]
+fn core() {
+    MS.get_or_init(|| {
+        common::mayastor_test_init();
+        MayastorEnvironment::new(MayastorCliArgs {
+            log_components: vec!["nvmf".into()],
+            reactor_mask: "0x1".to_string(),
+            ..Default::default()
+        })
+        .init()
+    });
+
+    common::truncate_file(DISKNAME1, 64 * 1024);
+    common::truncate_file(DISKNAME2, 64 * 1024);
+
+    Reactor::block_on(async {
+        works().await;
+    });
 }
 
 async fn works() {
@@ -70,40 +65,43 @@ async fn works() {
     let n = nexus_lookup("core_nexus").expect("nexus not found");
     n.destroy().await;
 }
+#[test]
+fn core_multi_open() {
+    Reactor::block_on(async {
+        create_nexus().await;
 
-async fn multiple_open() {
-    create_nexus().await;
+        let n = nexus_lookup("core_nexus").expect("failed to lookup nexus");
 
-    let n = nexus_lookup("core_nexus").expect("failed to lookup nexus");
+        let d1 = Bdev::open_by_name("core_nexus", true)
+            .expect("failed to open first desc to nexus");
+        let d2 = Bdev::open_by_name("core_nexus", true)
+            .expect("failed to open second desc to nexus");
 
-    let d1 = Bdev::open_by_name("core_nexus", true)
-        .expect("failed to open first desc to nexus");
-    let d2 = Bdev::open_by_name("core_nexus", true)
-        .expect("failed to open second desc to nexus");
+        let ch1 = d1.get_channel().expect("failed to get channel!");
+        let ch2 = d2.get_channel().expect("failed to get channel!");
+        drop(ch1);
+        drop(ch2);
 
-    let ch1 = d1.get_channel().expect("failed to get channel!");
-    let ch2 = d2.get_channel().expect("failed to get channel!");
-    drop(ch1);
-    drop(ch2);
-
-    // we must drop the descriptors before we destroy the nexus
-    drop(dbg!(d1));
-    drop(dbg!(d2));
-    n.destroy().await;
+        // we must drop the descriptors before we destroy the nexus
+        drop(dbg!(d1));
+        drop(dbg!(d2));
+        n.destroy().await;
+    });
 }
 
-async fn handle_test() {
-    bdev_create(BDEVNAME1).await.expect("failed to create bdev");
-    let hdl2 = BdevHandle::open(BDEVNAME1, true, true)
-        .expect("failed to create the handle!");
-    let hdl3 = BdevHandle::open(BDEVNAME1, true, true);
-    assert_eq!(hdl3.is_err(), true);
+#[test]
+fn core_handle_test() {
+    Reactor::block_on(async {
+        bdev_create(BDEVNAME1).await.expect("failed to create bdev");
+        let hdl2 = BdevHandle::open(BDEVNAME1, true, true)
+            .expect("failed to create the handle!");
+        let hdl3 = BdevHandle::open(BDEVNAME1, true, true);
+        assert_eq!(hdl3.is_err(), true);
 
-    // we must drop the descriptors before we destroy the nexus
-    drop(hdl2);
-    drop(hdl3);
+        // we must drop the descriptors before we destroy the nexus
+        drop(hdl2);
+        drop(hdl3);
 
-    bdev_destroy(BDEVNAME1)
-        .await
-        .expect("failed to destroy bdev");
+        bdev_destroy(BDEVNAME1).await.unwrap();
+    });
 }

@@ -189,6 +189,7 @@ unsafe extern "C" fn jsonrpc_handler<H, P, R, E>(
     // deserialize parameters
     match serde_json::from_str::<P>(&params) {
         Ok(args) => {
+            dbg!(params);
             let fut = async move {
                 // call user provided handler for the method
                 let res = handler(args).await;
@@ -226,7 +227,7 @@ unsafe extern "C" fn jsonrpc_handler<H, P, R, E>(
                     }
                 }
             };
-            executor::spawn(fut);
+            crate::core::Reactors::current().unwrap().send_future(fut);
         }
         Err(err) => {
             // parameters are not what is expected

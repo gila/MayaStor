@@ -603,6 +603,8 @@ impl MayastorEnvironment {
                     );
                 }
             }
+            crate::pool::register_pool_methods();
+            crate::replica::register_replica_methods();
         });
 
         self

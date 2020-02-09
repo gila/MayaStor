@@ -3,7 +3,7 @@ use log::*;
 
 use mayastor::{
     bdev::{nexus_create, nexus_lookup},
-    core::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment},
+    core::{mayastor_env_stop, MayastorCliArgs, MayastorEnvironment, Reactor},
 };
 
 static DISKNAME1: &str = "/tmp/disk1.img";
@@ -21,7 +21,11 @@ fn mount_fs() {
     common::truncate_file(DISKNAME2, 64 * 1024);
 
     let rc = MayastorEnvironment::new(MayastorCliArgs::default())
-        .start(|| mayastor::executor::spawn(works()))
+        .start(|| {
+            Reactor::block_on(async {
+                works().await;
+            });
+        })
         .unwrap();
 
     assert_eq!(rc, 0);
