@@ -22,7 +22,7 @@ pub use nexus::{
     nexus_label::{GPTHeader, GptEntry},
 };
 
-pub use nvmf_dev::{NvmfBdev, NvmfParseError};
+pub use nvmf_dev::{NvmeCtlAttachReq, NvmfParseError};
 
 unsafe fn parse_config_param<T>(
     sp: *mut spdk_conf_section,

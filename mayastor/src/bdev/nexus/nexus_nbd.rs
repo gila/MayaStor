@@ -2,7 +2,6 @@
 
 use crate::executor::{cb_arg, errno_result_from_i32, ErrnoResult};
 use futures::channel::oneshot;
-use futures_timer::Delay;
 use nix::{convert_ioctl_res, errno::Errno, libc};
 use snafu::{ResultExt, Snafu};
 use spdk_sys::{
@@ -20,7 +19,6 @@ use std::{
     io,
     os::unix::io::AsRawFd,
     path::Path,
-    time::Duration,
 };
 use sysfs::parse_value;
 
@@ -41,7 +39,6 @@ async fn wait_until_ready(path: &str) -> Result<(), ()> {
     let device_size: u32 = 0;
     // each iteration sleeps 100ms => total time out is 10s
     for _i in 1i32 .. 100 {
-        std::thread::sleep_ms(100);
         let f = OpenOptions::new().read(true).open(Path::new(&path));
         if f.is_err() {
             trace!("Failed to open nbd device {}, retrying ...", path);

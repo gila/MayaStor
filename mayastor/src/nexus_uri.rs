@@ -4,7 +4,7 @@ use crate::{
         AioParseError,
         IscsiBdev,
         IscsiParseError,
-        NvmfBdev,
+        NvmeCtlAttachReq,
         NvmfParseError,
     },
     jsonrpc::{Code, RpcErrorCode},
@@ -85,7 +85,7 @@ pub enum BdevType {
     /// backend iSCSI target most stable
     Iscsi(IscsiBdev),
     /// backend NVMF target pretty unstable as of Linux 5.2
-    Nvmf(NvmfBdev),
+    Nvmf(NvmeCtlAttachReq),
     /// bdev type is arbitrary bdev found in spdk (used for local replicas)
     Bdev(String),
 }
@@ -119,7 +119,7 @@ fn nexus_parse_uri(uri: &str) -> Result<BdevType, BdevCreateDestroy> {
                 uri,
             },
         )?),
-        "nvmf" => BdevType::Nvmf(NvmfBdev::try_from(&parsed_uri).context(
+        "nvmf" => BdevType::Nvmf(NvmeCtlAttachReq::try_from(&parsed_uri).context(
             ParseNvmfUri {
                 uri,
             },
