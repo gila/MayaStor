@@ -280,7 +280,7 @@ impl Reactor {
     /// set the state of this reactor
     fn set_state(&self, state: usize) {
         match state {
-            SUSPEND | RUNNING | SHUTDOWN | DEVELOPER_DELAY => {
+            11 | SUSPEND | RUNNING | SHUTDOWN | DEVELOPER_DELAY => {
                 self.flags.set(state)
             }
             _ => panic!("Invalid state"),
@@ -375,5 +375,38 @@ impl Reactor {
         // during polling we switch context ensure we leave the poll routine
         // with setting a context again.
         self.thread_enter();
+    }
+}
+
+impl Future for &'static Reactor {
+    type Output = Result<(), ()>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match self.flags.get() {
+            RUNNING => {
+                self.poll_once();
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            SHUTDOWN => {
+                info!("future reactor {} shutdown requested", self.lcore);
+
+                self.threads.iter().for_each(|t| t.destroy());
+                unsafe { spdk_env_thread_wait_all() };
+                Poll::Ready(Err(()))
+            }
+            DEVELOPER_DELAY => {
+                std::thread::sleep(Duration::from_millis(1));
+                self.poll_once();
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            INIT => {
+                self.poll_once();
+                self.flags.set(DEVELOPER_DELAY);
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            _ => panic!(),
+        }
     }
 }

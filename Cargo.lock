@@ -1002,6 +1002,7 @@ dependencies = [
  "spdk-sys",
  "structopt",
  "sysfs",
+ "tokio",
  "url",
  "uuid",
 ]
