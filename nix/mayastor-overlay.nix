@@ -1,4 +1,5 @@
 self: super: {
+  terraform-provider-libvirt = super.callPackage ./pkgs/terraform-provider-libvirt {};
   libiscsi = super.callPackage ./pkgs/libiscsi {};
   nvme-cli = super.callPackage ./pkgs/nvme-cli {};
   nvmet-cli = super.callPackage ./pkgs/nvmet-cli {};
