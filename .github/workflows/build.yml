@@ -13,6 +13,4 @@ jobs:
       with:
         entrypoint: /bin/sh
         args: |
-        "-c \"
-        nix-shell --run 'cargo build --all'
-        \""
+        "-c \"nix-shell --run 'cargo build --all\""
