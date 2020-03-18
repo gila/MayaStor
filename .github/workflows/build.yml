@@ -8,6 +8,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       with:
-        submodule: true
-    - uses: cachix/install-nix-action@v7
-    - run: nix-shell --run 'cargo fmt --all'
+        submodules: true
+    - uses: docker://mayadata/msbuild-env:latest
+    - run: nix-shell --run 'true'
