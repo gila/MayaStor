@@ -9,5 +9,5 @@ jobs:
     - uses: actions/checkout@v2
       with:
         submodules: true
-    - uses: docker://mayadata/msbuild-env:latest
+    - uses: docker://mayadata/ms-buildenv:latest
     - run: nix-shell --run 'true'
