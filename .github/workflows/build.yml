@@ -1,0 +1,13 @@
+name: "build"
+on:
+  pull_request:
+  push:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodule: true
+    - uses: cachix/install-nix-action@v7
+    - run: nix-shell --run 'cargo fmt --all'
