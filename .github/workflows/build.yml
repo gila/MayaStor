@@ -12,4 +12,4 @@ jobs:
     - uses: docker://mayadata/ms-buildenv:latest
       with:
         entrypoint: /bin/sh
-        args: "-c \"nix-shell --run 'cargo build --all\""
+        args: "-c \"nix-shell --run 'cargo build --all'\""
