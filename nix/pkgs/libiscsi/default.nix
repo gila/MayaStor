@@ -6,7 +6,7 @@ stdenv.mkDerivation rec {
 
   src = fetchgit {
     url = "https://github.com/sahlberg/libiscsi.git";
-    rev =  v${version};
+    rev = "${version}";
     sha256 = "0ajrkkg5awmi8m4b3mha7h07ylg18k252qprvk1sgq0qbyd66zy7";
   };
 
@@ -15,16 +15,16 @@ stdenv.mkDerivation rec {
   meta = {
     description = "User space iscsi library";
     longDescription = ''
-      Libiscsi is a client-side library to implement the iSCSI protocol that can be used
-      to access the resources of an iSCSI target.
+      Libiscsi is a client-side library to implement the iSCSI protocol that
+      can be used to access the resources of an iSCSI target.
 
-      The library is fully asynchronous with regards to iSCSI commands and SCSI tasks,
-      but a synchronous layer is also provided for ease of use for simpler
-      applications.
+      The library is fully asynchronous with regards to iSCSI commands and
+      SCSI tasks, but a synchronous layer is also provided for ease of use
+      for simpler applications.
     '';
     homepage = "https://github.com/sahlberg/libiscsi";
     licenses = stdenv.lib.licenses.gpl2;
-    maintainers = "gila@openebs.io";
+    maintainers = [ "gila" ];
     platforms = stdenv.lib.platforms.x86_64;
   };
 
