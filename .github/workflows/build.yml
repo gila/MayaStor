@@ -10,4 +10,9 @@ jobs:
       with:
         submodules: true
     - uses: docker://mayadata/ms-buildenv:latest
-    - run: nix-shell --run 'true'
+      with:
+        entrypoint: /bin/sh
+        args: |
+        -c "\
+        nix-shell --run 'cargo build --all'
+        "

@@ -6,7 +6,7 @@ stdenv.mkDerivation rec {
 
   src = fetchgit {
     url = "https://github.com/sahlberg/libiscsi.git";
-    rev = "eea5d3ba8e8fca98cde4b16b77f23a4fd683f3ba";
+    rev =  v${version};
     sha256 = "0ajrkkg5awmi8m4b3mha7h07ylg18k252qprvk1sgq0qbyd66zy7";
   };
 
