@@ -25,7 +25,7 @@ stdenv.mkDerivation rec {
     homepage = "https://github.com/sahlberg/libiscsi";
     licenses = stdenv.lib.licenses.gpl2;
     maintainers = [ "gila" ];
-    platforms = stdenv.lib.platforms.x86_64;
+    platforms = stdenv.lib.platforms.linux;
   };
 
 }
