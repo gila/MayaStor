@@ -3,8 +3,6 @@ name: Clippy check
 jobs:
   clippy_check:
     runs-on: ubuntu-latest
-    container:
-      image: mayadata/ms-buildenv:latest
     steps:
       - uses: actions/checkout@v1
       - uses: actions-rs/toolchain@v1
