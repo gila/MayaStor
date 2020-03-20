@@ -6,16 +6,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@master
-    - uses: docker://mayadata/ms-buildenv:latest
-      with:
-        entrypoint: /bin/sh
-        args: "-c \"nix-shell --run 'cargo build --all'\""
+      - uses: actions/checkout@master
+      - uses: cachix/cachix-action@v5
+        with:
+          name: mayastor
+      - uses: docker://mayadata/ms-buildenv:latest
+        with:
+          entrypoint: /bin/sh
+          args: '-c "nix-env -iA cachix -f https://cachix.org/api/v1/install && \
+                     nix-shell --run ''cachix use mayastor && cargo build --all''"'
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@master
-    - uses: docker://mayadata/ms-buildenv:latest
-      with:
-        entrypoint: /bin/sh
-        args: "-c \"nix-shell --run 'cargo clippy --all --all-targets -- -D warnings'\""
+      - uses: actions/checkout@master
+      - uses: docker://mayadata/ms-buildenv:latest
+        with:
+          entrypoint: /bin/sh
+          args: '-c "nix-env -iA cachix -f https://cachix.org/api/v1/install && \
+                     nix-shell --run '' cachix use mayastor && cargo clippy --all --all-targets -- -D warnings''"'
