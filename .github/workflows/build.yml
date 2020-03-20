@@ -1,15 +1,21 @@
-name: "build"
+name: "CI-basic"
 on:
   pull_request:
   push:
 jobs:
-  tests:
+  build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@master
-      with:
-        submodules: true
     - uses: docker://mayadata/ms-buildenv:latest
       with:
         entrypoint: /bin/sh
         args: "-c \"nix-shell --run 'cargo build --all'\""
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    - uses: docker://mayadata/ms-buildenv:latest
+      with:
+        entrypoint: /bin/sh
+        args: "-c \"nix-shell --run 'cargo clippy --all --all-targets -- -D warnings'\""
