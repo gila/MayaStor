@@ -1,8 +1,9 @@
 use std::ffi::{c_void, CString};
 
 use once_cell::sync::Lazy;
-
+use serde_json::json;
 use spdk_sys::{
+    spdk_bdev,
     spdk_bdev_fn_table,
     spdk_bdev_io,
     spdk_bdev_io_type,
@@ -41,7 +42,7 @@ impl NexusFnTable {
         f_tbl.get_io_channel = Some(Self::io_channel);
         f_tbl.destruct = Some(Self::destruct);
         f_tbl.dump_info_json = Some(Self::dump_info_json);
-
+        //f_tbl.write_config_json = Some(Self::write_config_json);
         NexusFnTable {
             f_tbl,
         }
@@ -165,4 +166,37 @@ impl NexusFnTable {
         }
         0
     }
+
+    // extern "C" fn write_config_json(
+    //     bdev: *mut spdk_bdev,
+    //     w: *mut spdk_json_write_ctx,
+    // ) {
+    //     let nexus = unsafe { Nexus::from_raw((*bdev).ctxt) };
+
+    //     let uris = nexus
+    //         .children
+    //         .iter()
+    //         .map(|c| c.name.clone())
+    //         .collect::<Vec<String>>();
+
+    //     let json = json!({
+    //         "method": "create_nexus",
+    //         "params": {
+    //             "uuid" : nexus.name.as_str()[6 ..],
+    //             "children" : uris,
+    //             "size": nexus.size,
+    //         },
+
+    //     });
+
+    //     let data =
+    // CString::new(serde_json::to_string(&json).unwrap()).unwrap();
+    //     unsafe {
+    //         spdk_json_write_val_raw(
+    //             w,
+    //             data.as_ptr() as *const _,
+    //             data.as_bytes().len(),
+    //         );
+    //     }
+    // }
 }

@@ -20,6 +20,7 @@ use rpc::mayastor::{
     UnpublishNexusRequest,
 };
 
+use super::nexus_bdev::nexus_import;
 use crate::{
     bdev::nexus::{
         instances,
@@ -107,6 +108,25 @@ pub(crate) fn register_rpc_methods() {
         fut.boxed_local()
     });
 
+    // rpc method to open a nexus during configuration import
+    jsonrpc_register("import_nexus", |args: CreateNexusRequest| {
+        let fut = async move {
+            let name = match uuid_to_name(&args.uuid) {
+                Ok(name) => name,
+                Err(err) => return Err(err),
+            };
+
+            let _ = nexus_import(
+                &name,
+                args.size,
+                Some(&args.uuid),
+                &args.children,
+            )
+            .await;
+            Ok(())
+        };
+        fut.boxed_local()
+    });
     jsonrpc_register::<_, _, _, Error>(
         "destroy_nexus",
         |args: DestroyNexusRequest| {

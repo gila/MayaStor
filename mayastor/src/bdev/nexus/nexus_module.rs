@@ -1,20 +1,26 @@
 use std::{cell::UnsafeCell, ffi::CString};
 
 use once_cell::sync::{Lazy, OnceCell};
-
+use serde_json::json;
 use spdk_sys::{
     spdk_bdev_module,
     spdk_bdev_module_examine_done,
     spdk_bdev_module_list_add,
     spdk_get_thread,
+    spdk_json_write_ctx,
+    spdk_json_write_val_raw,
 };
 
+use super::instances;
 use crate::{
-    bdev::nexus::{
-        nexus_bdev::{Nexus, NexusState},
-        nexus_io::NioCtx,
+    bdev::{
+        nexus::{
+            nexus_bdev::{Nexus, NexusState},
+            nexus_io::NioCtx,
+        },
+        nexus_lookup,
     },
-    core::Bdev,
+    core::{Bdev, Reactors},
 };
 
 const NEXUS_NAME: &str = "NEXUS_CAS_MODULE";
@@ -55,6 +61,7 @@ impl NexusModule {
         module.get_ctx_size = Some(Self::nexus_ctx_size);
         module.examine_config = Some(Self::examine);
         module.examine_disk = None;
+        module.config_json = Some(Self::config_json);
         NexusModule(Box::into_raw(module))
     }
 
@@ -115,7 +122,6 @@ impl NexusModule {
         let instances = Self::get_instances();
 
         // dont examine ourselves
-
         if instances.iter().any(|n| n.name == name) {
             unsafe {
                 spdk_bdev_module_examine_done(
@@ -126,12 +132,19 @@ impl NexusModule {
         }
 
         instances
-            .iter()
+            .iter_mut()
             .filter(|n| n.state == NexusState::Init)
-            .any(|bdev| {
-                let n = unsafe { Nexus::from_raw((*bdev.bdev.as_ptr()).ctxt) };
+            .any(|n| {
                 if n.examine_child(&name) {
-                    let _r = n.open();
+                    info!("child {} for nexus {} came online", name, n.name);
+                    let master = Reactors::current();
+                    master.send_future(async move {
+                        if let Ok(_ret) = n.open().await {
+                            debug!("nexus {} late completed", n.name);
+                        } else {
+                            debug!("nexus {} still not completed", n.name);
+                        }
+                    });
                     return true;
                 }
                 false
@@ -144,6 +157,36 @@ impl NexusModule {
 
     extern "C" fn nexus_ctx_size() -> i32 {
         std::mem::size_of::<NioCtx>() as i32
+    }
+
+    extern "C" fn config_json(w: *mut spdk_json_write_ctx) -> i32 {
+        instances().iter().for_each(|nexus| {
+            let uris = nexus
+                .children
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<String>>();
+
+            let json = json!({
+                "method": "import_nexus",
+                "params": {
+                    "uuid" : nexus.name.as_str()[6 ..],
+                    "children" : uris,
+                    "size": nexus.size,
+                },
+            });
+
+            let data =
+                CString::new(serde_json::to_string(&json).unwrap()).unwrap();
+            unsafe {
+                spdk_json_write_val_raw(
+                    w,
+                    data.as_ptr() as *const _,
+                    data.as_bytes().len(),
+                );
+            }
+        });
+        0
     }
 }
 

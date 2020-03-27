@@ -792,7 +792,7 @@ pub async fn nexus_create(
     let mut ni = Nexus::new(name, size, uuid, None);
 
     for child in children {
-        if let Err(err) = ni.register_child(child).await {
+        if let Err(err) = ni.create_and_register(child).await {
             ni.destroy_children().await;
             return Err(err).context(CreateChild {
                 name: ni.name.clone(),
@@ -805,6 +805,34 @@ pub async fn nexus_create(
     Ok(())
 }
 
+pub async fn nexus_import(
+    name: &str,
+    size: u64,
+    uuid: Option<&str>,
+    children: &[String],
+) -> Result<(), Error> {
+    debug!("importing nexus {}", name);
+    let nexus_list = instances();
+
+    if nexus_list.iter().any(|n| n.name == name) {
+        return Ok(());
+    }
+
+    let mut ni = Nexus::new(name, size, uuid, None);
+
+    for child in children {
+        if let Err(err) = ni.open_and_register(child).await {
+            return Err(err).context(CreateChild {
+                name: ni.name.clone(),
+            });
+        }
+    }
+    //TODO only allow for incomplete errors here
+    let _ = ni.open().await;
+
+    nexus_list.push(ni);
+    Ok(())
+}
 /// Lookup a nexus by its name (currently used only by test functions).
 pub fn nexus_lookup(name: &str) -> Option<&mut Nexus> {
     if let Some(nexus) = instances().iter_mut().find(|n| n.name == name) {

@@ -68,9 +68,9 @@ impl Nexus {
             .for_each(drop);
     }
 
-    /// register a single child to nexus, only allowed during the nexus init
-    /// phase
-    pub async fn register_child(
+    /// Create and register a single child to nexus, only allowed during the
+    /// nexus init phase
+    pub async fn create_and_register(
         &mut self,
         uri: &str,
     ) -> Result<(), BdevCreateDestroy> {
@@ -86,6 +86,23 @@ impl Nexus {
         Ok(())
     }
 
+    /// Open and register an existing child. This function is typically used
+    /// when importing a saved configuration.
+    pub async fn open_and_register(
+        &mut self,
+        uri: &str,
+    ) -> Result<(), BdevCreateDestroy> {
+        assert_eq!(self.state, NexusState::Init);
+
+        self.children.push(NexusChild::new(
+            uri.to_string(),
+            self.name.clone(),
+            Bdev::lookup_by_name(uri),
+        ));
+
+        self.child_count += 1;
+        Ok(())
+    }
     /// add a new child to an existing nexus. note that the child is added and
     /// opened but not taking part of any new IO's that are submitted to the
     /// nexus.
@@ -457,6 +474,7 @@ impl Nexus {
         if self.children.is_empty()
             || self.children.iter().any(|c| c.bdev.is_none())
         {
+            debug!("{} configuration is still incomplete..", self.name);
             return Err(Error::NexusIncomplete {
                 name: self.name.clone(),
             });

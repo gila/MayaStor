@@ -23,6 +23,8 @@ mkShell {
     gdb
     gptfdisk
     libiscsi.bin
+    libiscsi.dev
+    libiscsi.lib
     libspdk
     nodePackages.jshint
     nodePackages.prettier
@@ -30,7 +32,7 @@ mkShell {
     nvme-cli
     pre-commit
     python3
-    rustChannel.${channel}.rust
+    #    rustChannel.${channel}.rust
     xfsprogs
   ] ++ mayastor.buildInputs;
 

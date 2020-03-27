@@ -543,7 +543,7 @@ impl MayastorEnvironment {
 
     extern "C" fn start_rpc(rc: i32, arg: *mut c_void) {
         if arg.is_null() || rc != 0 {
-            panic!("Failed to initialize subsystems: {}", rc);
+            info!("Failed to initialize subsystems: {}", rc);
         }
 
         let rpc = unsafe { CString::from_raw(arg as _) };
