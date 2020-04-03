@@ -3,19 +3,19 @@ on:
   pull_request:
   push:
 jobs:
-  build:
+  Cargo build --all:
     runs-on: ubuntu-latest
+    container: docker://mayadata/ms-buildenv:buildah
     steps:
       - uses: actions/checkout@master
-      - uses: docker://mayadata/ms-buildenv:latest
-        with:
-          entrypoint: /bin/sh
-          args: -c "nix-env -iA cachix -f https://cachix.org/api/v1/install && cachix use mayastor && nix-shell --run 'cargo build --all'"
-  lint:
+      - run: cargo build --all
+
+  Cargo clippy:
     runs-on: ubuntu-latest
+    container: docker://mayadata/ms-buildenv:buildah
     steps:
       - uses: actions/checkout@master
-      - uses: docker://mayadata/ms-buildenv:latest
+      - uses: actions-rs/clippy-check@v1
         with:
-          entrypoint: /bin/sh
-          args: -c "nix-env -iA cachix -f https://cachix.org/api/v1/install && cachix use mayastor && nix-shell --run 'cargo build --all'"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features        
