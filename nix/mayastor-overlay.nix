@@ -14,6 +14,8 @@ self: super: {
     ];
 
   });
+  clang = super.lowPrio super.clang;
+  mkUserEnvironment = super.callPackage ./lib/mkUserEnvironment.nix {};
 
   terraform-provider-lxd = super.callPackage ./pkgs/terraform-provider-lxd {};
   libiscsi = super.callPackage ./pkgs/libiscsi {};

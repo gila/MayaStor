@@ -66,8 +66,6 @@ stdenv.mkDerivation rec {
   hardeningDisable = [ "all" ];
 
   postBuild = ''
-
-   # see README in spdk-sys why this needs to be done
    find . -type f -name 'libspdk_ut_mock.a' -delete
    find . -type f -name 'librte_vhost.a' -delete
 
@@ -82,14 +80,21 @@ stdenv.mkDerivation rec {
 
   # todo -- split out in dev and normal pkg
   postInstall = ''
-    # copy headers found in lib which are private
+
+    mkdir $out/include/spdk/spdk
+    mv $out/include/spdk/*.h $out/include/spdk/spdk
+
+    pushd include
+    find . -type f -name "*.h" -exec install -D "{}" $out/include/spdk/{} \;
+    popd
+
     pushd lib
-    find . -type f -name "*.h" -exec install -D "{}" $out/include/{} \;
+    find . -type f -name "*.h" -exec install -D "{}" $out/include/spdk/{} \;
     popd
 
     # copy private headers from bdev modules needed for creating of bdevs
     pushd module
-    find . -type f -name "*.h" -exec install -D "{}" $out/include/{} \;
+    find . -type f -name "*.h" -exec install -D "{}" $out/include/spdk/{} \;
     popd
 
     # copy over the library

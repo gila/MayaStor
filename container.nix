@@ -17,9 +17,9 @@ in
 pkgs.dockerTools.buildImageWithNixDb {
   name = "jan";
   tag = "latest";
-  fromImage = "nixos";
+  fromImage = nixos;
 
-  contents = with pkgs; [ stdenv curl bash busybox cargo rustc libspdk ] ++ mayastor.buildInputs;
+  contents = with pkgs; [ stdenv curl bash busybox cargo rustc ];
 
   config = {
     Cmd = [ "${entry}/bin/wrapper" ];
