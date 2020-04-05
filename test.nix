@@ -2,30 +2,38 @@
 with import <nixpkgs> { };
 
 let
-  mybin = binutils-unwrapped.overrideAttrs (o: rec { meta.priority = 5; });
+  bintools = binutils-unwrapped.overrideAttrs (o: rec { meta.priority = 9; });
+  libclang = llvmPackages.libclang.overrideAttrs(o : rec {
+    meta.priority = 4;
+  });
 
+  libc = glibc.overrideAttrs(o: rec{
+    meta.priority = 4;
+  });
   # useful things to be included within the container
   core = [
     bashInteractive
+    bintools
     cacert
     coreutils
     findutils
     git
-    glibc
     gnugrep
     gnused
     gzip
     iproute # vscode
     less
-    mybin
     nix
     procps
+    libc
     stdenv.cc
+    stdenv.cc.cc.lib
     xz
   ];
 
   # things we need for rust
-  rust = [ cargo rustc rustfmt llvmPackages.libclang protobuf ];
+  rust = [ rustup libclang protobuf ];
+  node = [ nodejs ];
 
   # generate a user profile for the image
   profile = mkUserEnvironment {
@@ -39,7 +47,7 @@ let
       rdma-core
       utillinux
       utillinux.dev
-    ] ++ core ++ rust;
+    ] ++ core ++ rust ++ node;
   };
 
   image = dockerTools.buildImage {
@@ -69,7 +77,7 @@ let
        # make sure /tmp exists which is used by cargo
        mkdir -m 0777 tmp
        # used for our RPC socket
-       mkdir -m 0777 /var/tmp
+       mkdir -p -m 0777 var/tmp
 
        # allow ubuntu ELF binaries to run. VSCode copies it's own.
        mkdir -p lib64
