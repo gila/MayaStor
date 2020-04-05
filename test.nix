@@ -56,6 +56,7 @@ let
       rdma-core
       libiscsi.lib
       openssl
+      numactl
     ];
   };
 
