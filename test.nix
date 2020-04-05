@@ -30,22 +30,15 @@ let
   # generate a user profile for the image
   profile = mkUserEnvironment {
     derivations = [
-      libspdk
       libaio
-      liburing
-      #gcc-unwrapped # do we need gcc??!?
-      #glibc.dev
-      #glocales
-      #locale
-      #mybin
-      utillinux.dev
-      utillinux
-      ##ccp
-
-      rdma-core
       libiscsi.lib
-      openssl
+      libspdk
+      liburing
       numactl
+      openssl
+      rdma-core
+      utillinux
+      utillinux.dev
     ] ++ core ++ rust;
   };
 

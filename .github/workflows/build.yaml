@@ -3,18 +3,25 @@ on:
   pull_request:
   push:
 jobs:
+
   Build:
     runs-on: ubuntu-latest
-    container: docker://mayadata/ms-buildenv:buildah
+    container: docker://mayadata/ms-buildenv:nix
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
       - run: cargo build --all
 
   Clippy:
     runs-on: ubuntu-latest
-    container: docker://mayadata/ms-buildenv:buildah
+    container: docker://mayadata/ms-buildenv:nix
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
       - uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
