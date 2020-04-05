@@ -30,7 +30,7 @@ mkShell {
     nvme-cli
     pre-commit
     python3
-    rustChannel.${channel}.rust
+    #    rustChannel.${channel}.rust
     xfsprogs
   ] ++ mayastor.buildInputs;
 
@@ -39,6 +39,7 @@ mkShell {
   PROTOC_INCLUDE = mayastor.PROTOC_INCLUDE;
 
   shellHook = ''
+    pre-commit install
     figlet ${channel}
   '';
 }

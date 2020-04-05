@@ -1,8 +1,9 @@
 // Unit tests for nexus grpc api. Nexus is basically a hub which does IO
 // replication to connected replicas. We test nexus operations with all
-// supported replica types: nvmf, iscsi, bdev and aio. aio is not used in
-// the product but it was part of initial implementation, so we keep it in
-// case it would be useful in the future.
+// supported replica types: nvmf, iscsi, bdev, aio and uring. aio is not used
+// in the product but it was part of initial implementation, so we keep it in
+// case it would be useful in the future. uring was added later and is also
+// not used in the product but kept for testing.
 
 'use strict';
 
@@ -14,12 +15,15 @@ const { exec } = require('child_process');
 const { createClient } = require('grpc-kit');
 const grpc = require('grpc');
 const common = require('./test_common');
+const enums = require('./grpc_enums');
 // just some UUID used for nexus ID
 const UUID = 'dbe4d7eb-118a-4d15-b789-a18d9af6ff21';
 const UUID2 = 'dbe4d7eb-118a-4d15-b789-a18d9af6ff22';
 
 // backend file for aio bdev
 const aioFile = '/tmp/aio-backend';
+// backend file for io_uring bdev
+const uringFile = '/tmp/uring-backend';
 // 64MB is the size of nexus and replicas
 const diskSize = 64 * 1024 * 1024;
 // external IP address detected by common lib
@@ -46,7 +50,7 @@ const configNexus = `
   ImmediateData Yes
   ErrorRecoveryLevel 0
   # Reduce mem requirements for iSCSI
-  MaxSessions 1
+  MaxSessions 2
   MaxConnectionsPerSession 1
 
 [PortalGroup1]
@@ -122,11 +126,38 @@ function createGrpcClient(service) {
   );
 }
 
-describe('nexus', function() {
+var doUring = (function () {
+  var executed = false;
+  var supportsUring = false;
+  return function () {
+    if (!executed) {
+      executed = true;
+      const { exec } = require('child_process');
+      const URING_SUPPORT_CMD = path.join(
+        __dirname,
+        '..',
+        'target',
+        'debug',
+        'uring-support'
+      );
+      const CMD = URING_SUPPORT_CMD + ' ' + uringFile;
+      exec(CMD, (error) => {
+        if (error) {
+          return;
+        }
+        supportsUring = true;
+      });
+    }
+    return supportsUring;
+  };
+})();
+
+describe('nexus', function () {
   var client;
   var nbd_device;
+  var iscsi_uri;
 
-  const unpublish = args => {
+  const unpublish = (args) => {
     return new Promise((resolve, reject) => {
       client.unpublishNexus(args, (err, data) => {
         if (err) return reject(err);
@@ -135,7 +166,7 @@ describe('nexus', function() {
     });
   };
 
-  const publish = args => {
+  const publish = (args) => {
     return new Promise((resolve, reject) => {
       client.publishNexus(args, (err, data) => {
         if (err) return reject(err);
@@ -144,7 +175,7 @@ describe('nexus', function() {
     });
   };
 
-  const destroyNexus = args => {
+  const destroyNexus = (args) => {
     return new Promise((resolve, reject) => {
       client.destroyNexus(args, (err, data) => {
         if (err) return reject(err);
@@ -153,7 +184,7 @@ describe('nexus', function() {
     });
   };
 
-  const createNexus = args => {
+  const createNexus = (args) => {
     return new Promise((resolve, reject) => {
       client.createNexus(args, (err, data) => {
         if (err) return reject(err);
@@ -172,7 +203,7 @@ describe('nexus', function() {
   };
   this.timeout(50000); // for network tests we need long timeouts
 
-  before(done => {
+  before((done) => {
     client = createGrpcClient('MayaStor');
     if (!client) {
       return done(new Error('Failed to initialize grpc client'));
@@ -181,13 +212,24 @@ describe('nexus', function() {
     async.series(
       [
         common.ensureNbdWritable,
-        next => {
+        (next) => {
           fs.writeFile(aioFile, '', next);
         },
-        next => {
+        (next) => {
           fs.truncate(aioFile, diskSize, next);
         },
-        next => {
+        (next) => {
+          fs.writeFile(uringFile, '', next);
+        },
+        (next) => {
+          fs.truncate(uringFile, diskSize, next);
+        },
+        (next) => {
+          if (doUring())
+            createArgs.children.push(`uring:///${uringFile}?blk_size=4096`);
+          next();
+        },
+        (next) => {
           // Start two spdk instances. The first one will hold the remote
           // nvmf target and the second one everything including nexus.
           // We must do this because if nvme initiator and target are in
@@ -204,7 +246,7 @@ describe('nexus', function() {
           common.startMayastor(configNexus, ['-r', common.SOCK, '-s', 386]);
 
           common.startMayastorGrpc();
-          common.waitFor(pingDone => {
+          common.waitFor((pingDone) => {
             // use harmless method to test if the mayastor is up and running
             client.listPools({}, pingDone);
           }, next);
@@ -214,16 +256,20 @@ describe('nexus', function() {
     );
   });
 
-  after(done => {
+  after((done) => {
     async.series(
       [
         common.stopAll,
         common.restoreNbdPerms,
-        next => {
-          fs.unlink(aioFile, err => next());
+        (next) => {
+          fs.unlink(aioFile, (err) => next());
+        },
+        (next) => {
+          if (doUring()) fs.unlink(uringFile, (err) => next());
+          else next();
         },
       ],
-      err => {
+      (err) => {
         if (client != null) {
           client.close();
         }
@@ -232,7 +278,7 @@ describe('nexus', function() {
     );
   });
 
-  it('should create a nexus using all types of replicas', done => {
+  it('should create a nexus using all types of replicas', (done) => {
     let args = {
       uuid: UUID,
       size: diskSize,
@@ -243,20 +289,22 @@ describe('nexus', function() {
         `nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:disk2`,
       ],
     };
+    if (doUring()) args.children.push(`uring:///${uringFile}?blk_size=4096`);
 
     client.CreateNexus(args, done);
   });
 
-  it('should list the created nexus', done => {
+  it('should list the created nexus', (done) => {
     client.ListNexus({}, (err, res) => {
       if (err) return done(err);
       assert.lengthOf(res.nexus_list, 1);
 
       let nexus = res.nexus_list[0];
+      const expectedChildren = 4 + doUring();
 
       assert.equal(nexus.uuid, UUID);
       assert.equal(nexus.state, 'online');
-      assert.lengthOf(nexus.children, 4);
+      assert.lengthOf(nexus.children, expectedChildren);
       assert.equal(nexus.children[0].uri, 'bdev:///Malloc0');
       assert.equal(nexus.children[0].state, 'open');
       assert.equal(nexus.children[1].uri, `aio:///${aioFile}?blk_size=4096`);
@@ -271,49 +319,58 @@ describe('nexus', function() {
         `nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:disk2`
       );
       assert.equal(nexus.children[3].state, 'open');
+      if (doUring()) {
+        assert.equal(
+          nexus.children[4].uri,
+          `uring:///${uringFile}?blk_size=4096`
+        );
+        assert.equal(nexus.children[4].state, 'open');
+      }
       done();
     });
   });
 
-  it('should be able to remove one of its children', done => {
+  it('should be able to remove one of its children', (done) => {
     let args = {
       uuid: UUID,
       uri: `nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:disk2`,
     };
 
-    client.RemoveChildNexus(args, err => {
+    client.RemoveChildNexus(args, (err) => {
       if (err) return done(err);
 
       client.ListNexus({}, (err, res) => {
         if (err) return done(err);
         let nexus = res.nexus_list[0];
-        assert.lengthOf(nexus.children, 3);
-        assert(!nexus.children.find(ch => ch.uri.match(/^nvmf:/)));
+        const expectedChildren = 3 + doUring();
+        assert.lengthOf(nexus.children, expectedChildren);
+        assert(!nexus.children.find((ch) => ch.uri.match(/^nvmf:/)));
         done();
       });
     });
   });
 
-  it('should be able to add the child back', done => {
+  it('should be able to add the child back', (done) => {
     let args = {
       uuid: UUID,
       uri: `nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:disk2`,
     };
 
-    client.AddChildNexus(args, err => {
+    client.AddChildNexus(args, (err) => {
       if (err) return done(err);
 
       client.ListNexus({}, (err, res) => {
         if (err) return done(err);
         let nexus = res.nexus_list[0];
-        assert.lengthOf(nexus.children, 4);
-        assert(nexus.children.find(ch => ch.uri.match(/^nvmf:/)));
+        const expectedChildren = 4 + doUring();
+        assert.lengthOf(nexus.children, expectedChildren);
+        assert(nexus.children.find((ch) => ch.uri.match(/^nvmf:/)));
         done();
       });
     });
   });
 
-  it('should fail to create another nexus with in use URIs', done => {
+  it('should fail to create another nexus with in use URIs', (done) => {
     let args = {
       uuid: UUID2,
       size: 131072,
@@ -327,7 +384,7 @@ describe('nexus', function() {
     });
   });
 
-  it('should fail creating a nexus with non existing URIs', done => {
+  it('should fail creating a nexus with non existing URIs', (done) => {
     let args = {
       uuid: UUID2,
       size: 131072,
@@ -343,27 +400,40 @@ describe('nexus', function() {
     });
   });
 
-  it('should publish the nexus using nbd', done => {
-    client.PublishNexus({ uuid: UUID }, (err, res) => {
-      assert(res.device_path);
-      nbd_device = res.device_path;
-      done();
-    });
+  it('should publish the nexus using nbd', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_NBD,
+      },
+      (err, res) => {
+        assert(res.device_path);
+        nbd_device = res.device_path;
+        done();
+      }
+    );
   });
 
-  it('should un-publish the nexus device', done => {
+  it('should un-publish the nexus device', (done) => {
     client.unpublishNexus({ uuid: UUID }, (err, res) => {
       if (err) done(err);
       done();
     });
   });
 
-  it('should re-publish the nexus using NBD, and a crypto key', done => {
-    client.PublishNexus({ uuid: UUID, key: '0123456789123456' }, (err, res) => {
-      assert(res.device_path);
-      nbd_device = res.device_path;
-      done();
-    });
+  it('should re-publish the nexus using NBD, and a crypto key', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_NBD,
+        key: '0123456789123456',
+      },
+      (err, res) => {
+        assert(res.device_path);
+        nbd_device = res.device_path;
+        done();
+      }
+    );
   });
 
   it('should be able to write to the NBD device', async () => {
@@ -382,13 +452,122 @@ describe('nexus', function() {
     await fd.read(buffer, 0, 512);
     await fd.close();
 
-    buffer.forEach(e => {
+    buffer.forEach((e) => {
       assert(e === 122);
     });
   });
 
-  it('should destroy the nexus without explicitly un-publishing it', done => {
-    client.DestroyNexus({ uuid: UUID }, err => {
+  it('should un-publish the NBD nexus device', (done) => {
+    client.unpublishNexus({ uuid: UUID }, (err, res) => {
+      if (err) done(err);
+      done();
+    });
+  });
+
+  it('should publish the nexus using iscsi', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+      },
+      (err, res) => {
+        assert(res.device_path);
+        done();
+      }
+    );
+  });
+
+  it('should un-publish the iscsi nexus device', (done) => {
+    client.unpublishNexus({ uuid: UUID }, (err, res) => {
+      if (err) done(err);
+      done();
+    });
+  });
+
+  it('should publish the nexus using iscsi', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+      },
+      (err, res) => {
+        assert(res.device_path);
+        done();
+      }
+    );
+  });
+
+  it('should fail another publish request using a different protocol', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_NBD,
+      },
+      (err, res) => {
+        if (!err) return done(new Error('Expected error'));
+        assert.equal(err.code, grpc.status.INVALID_ARGUMENT);
+        done();
+      }
+    );
+  });
+
+  it('should succeed another publish request using the existing protocol', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+      },
+      (err, res) => {
+        if (err) done(err);
+        assert(res.device_path);
+        done();
+      }
+    );
+  });
+
+  it('should un-publish the iscsi nexus device', (done) => {
+    client.unpublishNexus({ uuid: UUID }, (err, res) => {
+      if (err) done(err);
+      done();
+    });
+  });
+
+  it('should succeed another un-publish request', (done) => {
+    client.unpublishNexus({ uuid: UUID }, (err, res) => {
+      if (err) done(err);
+      done();
+    });
+  });
+
+  it('should re-publish the nexus using iSCSI and a crypto-key', (done) => {
+    client.PublishNexus(
+      {
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+        key: '0123456789123456',
+      },
+      (err, res) => {
+        assert(res.device_path);
+        iscsi_uri = res.device_path;
+        done();
+      }
+    );
+  });
+
+  it('should send io to the iscsi nexus device', (done) => {
+    let uri = iscsi_uri + '/0';
+    // runs the perf test for 1 second
+    exec('iscsi-perf -t 1 ' + uri, (err, stdout, stderr) => {
+      if (err) {
+        done(stderr);
+      } else {
+        done();
+      }
+    });
+  });
+
+  it('should destroy the nexus without explicitly un-publishing it', (done) => {
+    client.DestroyNexus({ uuid: UUID }, (err) => {
       if (err) return done(err);
 
       client.ListNexus({}, (err, res) => {
@@ -399,7 +578,7 @@ describe('nexus', function() {
     });
   });
 
-  it('should fail to create a nexus with mixed block sizes', done => {
+  it('should fail to create a nexus with mixed block sizes', (done) => {
     let args = {
       uuid: UUID,
       size: 131072,
@@ -415,7 +594,7 @@ describe('nexus', function() {
     });
   });
 
-  it('should fail to create a nexus with size larger than any of its replicas', done => {
+  it('should fail to create a nexus with size larger than any of its replicas', (done) => {
     let args = {
       uuid: UUID,
       size: 2 * diskSize,
@@ -432,7 +611,7 @@ describe('nexus', function() {
     });
   });
 
-  it('should have zero nexus devices left', done => {
+  it('should have zero nexus devices left', (done) => {
     client.ListNexus({}, (err, res) => {
       if (err) return done(err);
       assert.lengthOf(res.nexus_list, 0);
@@ -440,16 +619,31 @@ describe('nexus', function() {
     });
   });
 
-  it('should create, publish, un-publish and finally destroy the same nexus', async () => {
+  it('should create, publish, un-publish and finally destroy the same NBD nexus', async () => {
     for (let i = 0; i < 10; i++) {
       await createNexus(createArgs);
-      await publish({ uuid: UUID });
+      await publish({
+        uuid: UUID,
+        share: enums.NEXUS_NBD,
+      });
       await unpublish({ uuid: UUID });
       await destroyNexus({ uuid: UUID });
     }
   });
 
-  it('should have zero nexus devices left', done => {
+  it('should create, publish, un-publish and finally destroy the same iSCSI nexus', async () => {
+    for (let i = 0; i < 10; i++) {
+      await createNexus(createArgs);
+      await publish({
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+      });
+      await unpublish({ uuid: UUID });
+      await destroyNexus({ uuid: UUID });
+    }
+  });
+
+  it('should have zero nexus devices left', (done) => {
     client.ListNexus({}, (err, res) => {
       if (err) return done(err);
       assert.lengthOf(res.nexus_list, 0);
@@ -457,15 +651,29 @@ describe('nexus', function() {
     });
   });
 
-  it('should create, publish, and destroy but without un-publishing the same nexus', async () => {
+  it('should create, publish, and destroy but without un-publishing the same nexus, with NBD protocol', async () => {
     for (let i = 0; i < 10; i++) {
       await createNexus(createArgs);
-      await publish({ uuid: UUID });
+      await publish({
+        uuid: UUID,
+        share: enums.NEXUS_NBD,
+      });
       await destroyNexus({ uuid: UUID });
     }
   });
 
-  it('should have zero nexus devices left', done => {
+  it('should create, publish, and destroy but without un-publishing the same nexus, with iSCSI protocol', async () => {
+    for (let i = 0; i < 10; i++) {
+      await createNexus(createArgs);
+      await publish({
+        uuid: UUID,
+        share: enums.NEXUS_ISCSI,
+      });
+      await destroyNexus({ uuid: UUID });
+    }
+  });
+
+  it('should have zero nexus devices left', (done) => {
     client.ListNexus({}, (err, res) => {
       if (err) return done(err);
       assert.lengthOf(res.nexus_list, 0);
@@ -480,7 +688,7 @@ describe('nexus', function() {
     }
   });
 
-  it('should have zero nexus devices left', done => {
+  it('should have zero nexus devices left', (done) => {
     client.ListNexus({}, (err, res) => {
       if (err) return done(err);
       assert.lengthOf(res.nexus_list, 0);
@@ -488,11 +696,11 @@ describe('nexus', function() {
     });
   });
 
-  it('should be the case that we do not have any dangling NBD devices left on the system', done => {
+  it('should be the case that we do not have any dangling NBD devices left on the system', (done) => {
     exec('sleep 1; lsblk --json', (err, stdout, stderr) => {
       if (err) return done(err);
       let output = JSON.parse(stdout);
-      output.blockdevices.forEach(e => {
+      output.blockdevices.forEach((e) => {
         assert(e.name.indexOf('nbd') === -1, `NBD Device found:\n${stdout}`);
       });
       done();

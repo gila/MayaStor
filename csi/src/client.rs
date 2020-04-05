@@ -16,10 +16,16 @@ use rpc::service::mayastor_client::MayastorClient;
 
 fn parse_share_protocol(pcol: Option<&str>) -> Result<i32, Status> {
     match pcol {
-        None => Ok(rpc::mayastor::ShareProtocol::None as i32),
-        Some("nvmf") => Ok(rpc::mayastor::ShareProtocol::Nvmf as i32),
-        Some("iscsi") => Ok(rpc::mayastor::ShareProtocol::Iscsi as i32),
-        Some("none") => Ok(rpc::mayastor::ShareProtocol::None as i32),
+        None => Ok(rpc::mayastor::ShareProtocolReplica::ReplicaNone as i32),
+        Some("nvmf") => {
+            Ok(rpc::mayastor::ShareProtocolReplica::ReplicaNvmf as i32)
+        }
+        Some("iscsi") => {
+            Ok(rpc::mayastor::ShareProtocolReplica::ReplicaIscsi as i32)
+        }
+        Some("none") => {
+            Ok(rpc::mayastor::ShareProtocolReplica::ReplicaNone as i32)
+        }
         Some(_) => Err(Status::new(
             Code::Internal,
             "Invalid value of share protocol".to_owned(),
@@ -39,6 +45,17 @@ async fn create_pool(
         .map(|dev| dev.to_owned())
         .collect();
     let block_size = value_t!(matches.value_of("block-size"), u32).unwrap_or(0);
+    let io_if = match matches.value_of("io-if") {
+        None | Some("auto") => rpc::mayastor::PoolIoIf::PoolIoAuto as i32,
+        Some("aio") => rpc::mayastor::PoolIoIf::PoolIoAio as i32,
+        Some("uring") => rpc::mayastor::PoolIoIf::PoolIoUring as i32,
+        Some(_) => {
+            return Err(Status::new(
+                Code::Internal,
+                "Invalid value of I/O interface".to_owned(),
+            ));
+        }
+    };
 
     if verbose {
         println!("Creating the pool {}", name);
@@ -49,6 +66,7 @@ async fn create_pool(
             name,
             disks,
             block_size,
+            io_if,
         }))
         .await?;
 
@@ -104,9 +122,9 @@ async fn list_pools(
                 "{: <20} {: <8} {: >12} {: >12}  ",
                 p.name,
                 match rpc::mayastor::PoolState::from_i32(p.state).unwrap() {
-                    rpc::mayastor::PoolState::Online => "online",
-                    rpc::mayastor::PoolState::Degraded => "degraded",
-                    rpc::mayastor::PoolState::Faulty => "faulty",
+                    rpc::mayastor::PoolState::PoolOnline => "online",
+                    rpc::mayastor::PoolState::PoolDegraded => "degraded",
+                    rpc::mayastor::PoolState::PoolFaulted => "faulted",
                 },
                 ByteSize::b(p.capacity).to_string_as(true),
                 ByteSize::b(p.used).to_string_as(true),
@@ -219,14 +237,14 @@ async fn list_replicas(
                 r.pool,
                 r.uuid,
                 r.thin,
-                match rpc::mayastor::ShareProtocol::from_i32(r.share) {
-                    Some(rpc::mayastor::ShareProtocol::None) => {
+                match rpc::mayastor::ShareProtocolReplica::from_i32(r.share) {
+                    Some(rpc::mayastor::ShareProtocolReplica::ReplicaNone) => {
                         "none"
                     }
-                    Some(rpc::mayastor::ShareProtocol::Nvmf) => {
+                    Some(rpc::mayastor::ShareProtocolReplica::ReplicaNvmf) => {
                         "nvmf"
                     }
-                    Some(rpc::mayastor::ShareProtocol::Iscsi) => {
+                    Some(rpc::mayastor::ShareProtocolReplica::ReplicaIscsi) => {
                         "iscsi"
                     }
                     None => "unknown",
@@ -327,6 +345,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("NUMBER")
                                 .help("block size of the underlying devices")
                                 .takes_value(true),
+                        )
+                        .arg(
+                            Arg::with_name("io-if")
+                                .short("i")
+                                .long("io-if")
+                                .help("I/O interface for the underlying devices")
                         )
                         .arg(
                             Arg::with_name("POOL")

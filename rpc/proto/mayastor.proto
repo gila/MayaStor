@@ -13,19 +13,27 @@ package mayastor;
 // Means no arguments or no return value.
 message Null {}
 
+// I/O interface used for underlying disks in a pool
+enum PoolIoIf {
+  POOL_IO_AUTO = 0;    // prefer uring if supported, falling back to aio
+  POOL_IO_AIO = 1;     // Linux AIO
+  POOL_IO_URING = 2;   // io_uring, requires Linux 5.1
+}
+
 // Create pool arguments.
 // Currently we support only concatenation of disks (RAID-0).
 message CreatePoolRequest {
   string name = 1;           // name of the pool
   repeated string disks = 2; // absolute disk device paths to be claimed by the pool
   uint32 block_size = 3; // when using files, we need to specify the block_size
+  PoolIoIf io_if = 4;        // I/O interface
 }
 
 // State of the storage pool (terminology comes from ZFS).
 enum PoolState {
-  ONLINE = 0;   // the pool is in normal working order
-  DEGRADED = 1; // the pool has experienced a failure but can still function
-  FAULTY = 2;   // the pool is completely inaccessible
+  POOL_ONLINE = 0;   // the pool is in normal working order
+  POOL_DEGRADED = 1; // the pool has experienced a failure but can still function
+  POOL_FAULTED = 2;  // the pool is completely inaccessible
 }
 
 // Storage pool properties
@@ -48,10 +56,19 @@ message ListPoolsReply {
 }
 
 // Protocol for remote storage access which exposes a replica.
-enum ShareProtocol {
-  NONE = 0;   // not exposed
-  NVMF = 1;   // NVMe over Fabrics (TCP)
-  ISCSI = 2;  // iSCSI
+enum ShareProtocolReplica {
+  REPLICA_NONE = 0;   // not exposed
+  REPLICA_NVMF = 1;   // NVMe over Fabrics (TCP)
+  REPLICA_ISCSI = 2;  // iSCSI
+}
+
+// Note that enum values use C++ scoping rules, meaning that enum values are siblings of their type,
+// not children of it.
+// So cannot use NBD, NVMF, and ISCSI as symbols for ShareProtocolNexus
+enum ShareProtocolNexus {
+  NEXUS_NBD = 0;    // local
+  NEXUS_NVMF = 1;   // NVMe over Fabrics (TCP)
+  NEXUS_ISCSI = 2;  // iSCSI
 }
 
 // Create replica arguments.
@@ -60,7 +77,7 @@ message CreateReplicaRequest {
   string pool = 2;  // name of the pool
   uint64 size = 3;  // size of the replica in bytes
   bool thin = 4;    // thin provisioning
-  ShareProtocol share = 5;  // protocol to expose the replica over
+  ShareProtocolReplica share = 5;  // protocol to expose the replica over
 }
 
 // Create replica response.
@@ -79,7 +96,7 @@ message Replica {
   string pool = 2;  // name of the pool
   bool thin = 3;    // thin provisioning
   uint64 size = 4;  // size of the replica in bytes
-  ShareProtocol share = 5;  // protocol used for exposing the replica
+  ShareProtocolReplica share = 5;  // protocol used for exposing the replica
   string uri = 6;   // uri usable by nexus to access it
 }
 
@@ -113,7 +130,7 @@ message StatReplicasReply {
 // Share replica request.
 message ShareReplicaRequest {
   string uuid = 1;  // uuid of the replica
-  ShareProtocol share = 2;  // protocol used for exposing the replica
+  ShareProtocolReplica share = 2;  // protocol used for exposing the replica
                             // Use "NONE" to disable remote access.
 }
 
@@ -146,6 +163,7 @@ message Nexus {
   // Path to device file for the volume (missing if not published).
   // Missing property and empty string are treated the same.
   string device_path = 5;
+  uint64 rebuilds = 6;         // total number of rebuild tasks
 }
 
 message ListNexusReply {
@@ -171,6 +189,7 @@ message RemoveChildNexusRequest {
 message PublishNexusRequest {
   string uuid = 1; // uuid of the nexus which to create device for
   string key = 2; // encryption key
+  ShareProtocolNexus share = 3;  // protocol used for the front end.
 }
 
 message PublishNexusReply {
@@ -194,6 +213,7 @@ message ChildNexusRequest {
 
 message RebuildStateRequest {
   string uuid = 1;  // uuid of the nexus
+  string uri = 2;   // uri of the destination child
 }
 
 message RebuildStateReply {
@@ -203,6 +223,11 @@ message RebuildStateReply {
 message StartRebuildRequest {
   string uuid = 1;  // uuid of the nexus
   string uri = 2;   // uri of the child to be rebuilt
+}
+
+message StopRebuildRequest {
+  string uuid = 1;  // uuid of the nexus
+  string uri = 2;   // uri of the destination child
 }
 
 message RebuildProgressRequest {

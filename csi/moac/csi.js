@@ -114,7 +114,7 @@ class CsiServer {
       'getCapacity',
       'controllerGetCapabilities',
     ];
-    methodNames.forEach(name => {
+    methodNames.forEach((name) => {
       controllerMethods[name] = function checkReady(args, cb) {
         log.trace(`CSI ${name} request: ${JSON.stringify(args)}`);
 
@@ -149,7 +149,7 @@ class CsiServer {
       'listSnapshots',
       'controllerExpandVolume',
     ];
-    methodNames.forEach(name => {
+    methodNames.forEach((name) => {
       controllerMethods[name] = function notImplemented(_, cb) {
         let msg = `CSI method ${name} not implemented`;
         log.error(msg);
@@ -225,7 +225,7 @@ class CsiServer {
     var caps = ['CONTROLLER_SERVICE', 'VOLUME_ACCESSIBILITY_CONSTRAINTS'];
     log.debug('getPluginCapabilities request: ' + caps.join(', '));
     cb(null, {
-      capabilities: caps.map(c => {
+      capabilities: caps.map((c) => {
         return { service: { type: c } };
       }),
     });
@@ -249,7 +249,7 @@ class CsiServer {
     ];
     log.debug('get capabilities request: ' + caps.join(', '));
     cb(null, {
-      capabilities: caps.map(c => {
+      capabilities: caps.map((c) => {
         return { rpc: { type: c } };
       }),
     });
@@ -344,14 +344,13 @@ class CsiServer {
     // create the volume
     var volume;
     try {
-      volume = await this.volumes.createVolume(
-        uuid,
-        count,
-        shouldNodes,
-        mustNodes,
-        args.capacityRange.requiredBytes,
-        args.capacityRange.limitBytes
-      );
+      volume = await this.volumes.createVolume(uuid, {
+        replicaCount: count,
+        preferredNodes: shouldNodes,
+        requiredNodes: mustNodes,
+        requiredBytes: args.capacityRange.requiredBytes,
+        limitBytes: args.capacityRange.limitBytes,
+      });
     } catch (err) {
       return cb(err);
     }
@@ -366,6 +365,12 @@ class CsiServer {
             segments: { 'kubernetes.io/hostname': volume.getNodeName() },
           },
         ],
+        // parameters defined in the storage class are only presented
+        // to the CSI driver createVolume method.
+        // Propagate them to other CSI driver methods involved in
+        // standing up a volume, using the volume context.
+        // Deep copy.
+        volumeContext: JSON.parse(JSON.stringify(args.parameters)),
       },
     });
   }
@@ -405,7 +410,7 @@ class CsiServer {
         volumes: this.volumes
           .get()
           .map(createK8sVolumeObject)
-          .map(v => {
+          .map((v) => {
             return { volume: v };
           }),
       };
@@ -480,9 +485,14 @@ class CsiServer {
     } catch (err) {
       return cb(err);
     }
+    if (!args.volumeContext || !args.volumeContext.protocol) {
+      return cb(
+        new GrpcError(grpc.status.INVALID_ARGUMENT, 'missing protocol')
+      );
+    }
 
     try {
-      await volume.publish();
+      await volume.publish(args.volumeContext.protocol);
     } catch (err) {
       if (err.code === grpc.status.ALREADY_EXISTS) {
         log.debug(`Volume "${args.volumeId}" already published on this node`);
@@ -493,7 +503,9 @@ class CsiServer {
       return;
     }
 
-    log.info(`Published volume "${args.volumeId}"`);
+    log.info(
+      `Published volume "${args.volumeId}, share proctocol: "${args.volumeContext.protocol}"`
+    );
     cb(null, {});
   }
 
@@ -549,7 +561,7 @@ class CsiServer {
       );
     }
     let caps = args.volumeCapabilities.filter(
-      cap => cap.accessMode.mode == 'SINGLE_NODE_WRITER'
+      (cap) => cap.accessMode.mode == 'SINGLE_NODE_WRITER'
     );
     let resp = {};
     if (caps.length > 0) {

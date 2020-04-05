@@ -17,12 +17,13 @@ const eventStream = require('./event_stream_test.js');
 const poolOperator = require('./pool_operator_test.js');
 const volumeObject = require('./volume_test.js');
 const volumesTest = require('./volumes_test.js');
+const volumeOperator = require('./volume_operator_test.js');
 const restApi = require('./rest_api_test.js');
 const csiTest = require('./csi_test.js');
 
 logger.setLevel('debug');
 
-describe('moac', function() {
+describe('moac', function () {
   describe('workq', workqTest);
   describe('grpc client', grpcTest);
   describe('watcher', watcherTest);
@@ -36,23 +37,24 @@ describe('moac', function() {
   describe('pool operator', poolOperator);
   describe('volume object', volumeObject);
   describe('volumes', volumesTest);
+  describe('volume operator', volumeOperator);
   describe('REST API', restApi);
   describe('CSI controller', csiTest);
 
   // Start moac without k8s just to test basic errors
-  it('start moac process', done => {
+  it('start moac process', (done) => {
     let child = spawn(path.join(__dirname, '..', 'index.js'), ['-s']);
     let stderr = '';
 
-    child.stdout.on('data', data => {
+    child.stdout.on('data', (data) => {
       if (data.toString().indexOf('🚀') >= 0) {
         child.kill();
       }
     });
-    child.stderr.on('data', data => {
+    child.stderr.on('data', (data) => {
       stderr += data.toString();
     });
-    child.on('close', code => {
+    child.on('close', (code) => {
       if (code == 0) {
         done();
       } else {

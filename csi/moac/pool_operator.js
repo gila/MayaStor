@@ -20,7 +20,8 @@ const crdPool = yaml.safeLoad(
 // Pool operator tries to bring the real state of storage pools on mayastor
 // nodes in sync with mayastorpool custom resources in k8s.
 class PoolOperator {
-  constructor() {
+  constructor(namespace) {
+    this.namespace = namespace;
     this.k8sClient = null; // k8s client
     this.registry = null; // registry containing info about mayastor nodes
     this.eventStream = null; // A stream of node and pool events.
@@ -54,8 +55,12 @@ class PoolOperator {
     this.registry = registry;
     this.watcher = new Watcher(
       'pool',
-      this.k8sClient.apis['openebs.io'].v1alpha1.mayastorpools,
-      this.k8sClient.apis['openebs.io'].v1alpha1.watch.mayastorpools,
+      this.k8sClient.apis['openebs.io'].v1alpha1.namespaces(
+        this.namespace
+      ).mayastorpools,
+      this.k8sClient.apis['openebs.io'].v1alpha1.watch.namespaces(
+        this.namespace
+      ).mayastorpools,
       this._filterMayastorPool
     );
   }
@@ -92,40 +97,39 @@ class PoolOperator {
     // event handlers to follow changes to them.
     await self.watcher.start();
     self._bindWatcher(self.watcher);
-    self.watcher.list().forEach(r => (self.resource[r.name] = r));
+    self.watcher.list().forEach((r) => (self.resource[r.name] = r));
 
     // this will start async processing of node and pool events
-    self.eventStream = new EventStream(self.registry);
-    self.eventStream.on('data', async ev => {
+    self.eventStream = new EventStream({ registry: self.registry });
+    self.eventStream.on('data', async (ev) => {
       if (ev.kind == 'pool') {
-        await self._onPoolEvent(ev.eventType, ev.object);
+        await self.workq.push(ev, self._onPoolEvent.bind(self));
       } else if (ev.kind == 'node' && ev.eventType == 'sync') {
-        await self._onNodeSyncEvent(ev.object.name);
+        await self.workq.push(ev.object.name, self._onNodeSyncEvent.bind(self));
       }
     });
   }
 
   // Handler for new/mod/del pool events
   //
-  // @param {string} eventType  Either new, mod or del.
-  // @param {object} pool       Pool object that the event relates to.
+  // @param {object} ev       Pool event as received from event stream.
   //
-  async _onPoolEvent(eventType, pool) {
-    let name = pool.name;
+  async _onPoolEvent(ev) {
+    let name = ev.object.name;
     let resource = this.resource[name];
 
-    log.debug(`Received "${eventType}" event for pool "${name}"`);
+    log.debug(`Received "${ev.eventType}" event for pool "${name}"`);
 
-    if (eventType == 'new') {
+    if (ev.eventType == 'new') {
       if (!resource) {
         log.warn(`Unknown pool "${name}" will be destroyed`);
         await this._destroyPool(name);
       } else {
-        await this._updateResource(pool);
+        await this._updateResource(ev.object);
       }
-    } else if (eventType == 'mod') {
-      await this._updateResource(pool);
-    } else if (eventType == 'del' && resource) {
+    } else if (ev.eventType == 'mod') {
+      await this._updateResource(ev.object);
+    } else if (ev.eventType == 'del' && resource) {
       log.warn(`Recreating destroyed pool "${name}"`);
       await this._createPool(resource);
     }
@@ -142,7 +146,7 @@ class PoolOperator {
     log.debug(`Syncing pool records for node "${nodeName}"`);
 
     let resources = Object.values(this.resource).filter(
-      ent => ent.node == nodeName
+      (ent) => ent.node == nodeName
     );
     for (let i = 0; i < resources.length; i++) {
       await this._createPool(resources[i]);
@@ -164,13 +168,13 @@ class PoolOperator {
   //
   _bindWatcher(watcher) {
     var self = this;
-    watcher.on('new', resource => {
+    watcher.on('new', (resource) => {
       self.workq.push(resource, self._createPool.bind(self));
     });
-    watcher.on('mod', resource => {
+    watcher.on('mod', (resource) => {
       self.workq.push(resource, self._modifyPool.bind(self));
     });
-    watcher.on('del', resource => {
+    watcher.on('del', (resource) => {
       self.workq.push(resource.name, self._destroyPool.bind(self));
     });
   }
@@ -198,12 +202,12 @@ class PoolOperator {
 
     if (
       !resource.disks.every(
-        ent => ent.startsWith('/dev/') && ent.indexOf('..') == -1
+        (ent) => ent.startsWith('/dev/') && ent.indexOf('..') == -1
       )
     ) {
       let msg = 'Disk must be absolute path beginning with /dev';
       log.error(`Cannot create pool "${name}": ${msg}`);
-      await this._updateResourceProps(name, 'PENDING', msg);
+      await this._updateResourceProps(name, 'pending', msg);
       return;
     }
 
@@ -211,22 +215,28 @@ class PoolOperator {
     if (!node) {
       let msg = `mayastor does not run on node "${nodeName}"`;
       log.error(`Cannot create pool "${name}": ${msg}`);
-      await this._updateResourceProps(name, 'PENDING', msg);
+      await this._updateResourceProps(name, 'pending', msg);
+      return;
+    }
+    if (!node.isSynced()) {
+      log.debug(
+        `The pool "${name}" will be synced when the node "${nodeName}" is synced`
+      );
       return;
     }
 
     // We will update the pool status once the pool is created, but
     // that can take a time, so set reasonable default now.
-    await this._updateResourceProps(name, 'PENDING', 'Creating the pool');
+    await this._updateResourceProps(name, 'pending', 'Creating the pool');
 
     try {
+      // pool resource props will be updated when "new" pool event is emitted
       pool = await node.createPool(name, resource.disks);
     } catch (err) {
       log.error(`Failed to create pool "${name}": ${err}`);
-      await this._updateResourceProps(name, 'PENDING', err.toString());
+      await this._updateResourceProps(name, 'pending', err.toString());
       return;
     }
-    await this._updateResource(pool);
   }
 
   // Remove the pool from internal state and if it exists destroy it.
@@ -293,11 +303,16 @@ class PoolOperator {
       log.warn(`State of unknown pool "${name}" has changed`);
       return;
     }
+    var state = pool.state.replace(/^POOL_/, '').toLowerCase();
+    var reason = '';
+    if (state == 'offline') {
+      reason = `mayastor does not run on the node "${pool.node}"`;
+    }
 
     await this._updateResourceProps(
       name,
-      pool.state,
-      pool.reason,
+      state,
+      reason,
       pool.capacity,
       pool.used
     );
@@ -355,6 +370,7 @@ class PoolOperator {
 
     try {
       await this.k8sClient.apis['openebs.io'].v1alpha1
+        .namespaces(this.namespace)
         .mayastorpools(name)
         .status.put({ body: k8sPool });
     } catch (err) {

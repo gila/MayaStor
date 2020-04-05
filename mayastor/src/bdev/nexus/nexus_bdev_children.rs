@@ -24,6 +24,7 @@
 
 use crossbeam::channel::Receiver;
 use futures::future::join_all;
+use rpc::mayastor::RebuildStateReply;
 use snafu::ResultExt;
 
 use crate::{
@@ -67,9 +68,9 @@ impl Nexus {
             .for_each(drop);
     }
 
-    /// register a single child to nexus, only allowed during the nexus init
-    /// phase
-    pub async fn register_child(
+    /// Create and register a single child to nexus, only allowed during the
+    /// nexus init phase
+    pub async fn create_and_register(
         &mut self,
         uri: &str,
     ) -> Result<(), BdevCreateDestroy> {
@@ -243,6 +244,46 @@ impl Nexus {
         }
     }
 
+    /// Return rebuild task associated with the destination.
+    /// Return error if no rebuild task associated with destination.
+    fn get_rebuild_task(
+        &mut self,
+        destination: &str,
+    ) -> Result<&mut RebuildTask, Error> {
+        match self
+            .rebuilds
+            .iter_mut()
+            .find(|t| t.destination == destination)
+        {
+            Some(rt) => Ok(rt),
+            None => Err(Error::RebuildTaskNotFound {
+                child: destination.to_string(),
+                name: self.name.clone(),
+            }),
+        }
+    }
+
+    /// Stop a rebuild task
+    pub async fn stop_rebuild(
+        &mut self,
+        destination: &str,
+    ) -> Result<(), Error> {
+        let rt = self.get_rebuild_task(destination)?;
+        rt.stop();
+        Ok(())
+    }
+
+    /// Return the state of a rebuild task
+    pub async fn get_rebuild_state(
+        &mut self,
+        destination: &str,
+    ) -> Result<RebuildStateReply, Error> {
+        let rt = self.get_rebuild_task(destination)?;
+        Ok(RebuildStateReply {
+            state: rt.state.to_string(),
+        })
+    }
+
     /// On rebuild task completion it updates the child state and removes the
     /// rebuild task in case of failure the child is left in a Faulted State
     async fn on_rebuild_complete(&mut self, task: String) -> Result<(), Error> {
@@ -399,16 +440,16 @@ impl Nexus {
     /// Add a child to the configuration when an example callback is run.
     /// The nexus is not opened implicitly, call .open() for this manually.
     pub fn examine_child(&mut self, name: &str) -> bool {
-        for mut c in &mut self.children {
-            if c.name == name && c.state == ChildState::Init {
+        self.children
+            .iter_mut()
+            .filter(|c| c.state == ChildState::Init && c.name == name)
+            .any(|c| {
                 if let Some(bdev) = Bdev::lookup_by_name(name) {
-                    debug!("{}: Adding child {}", self.name, name);
                     c.bdev = Some(bdev);
                     return true;
                 }
-            }
-        }
-        false
+                false
+            })
     }
 
     /// try to open all the child devices

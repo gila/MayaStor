@@ -67,8 +67,12 @@ class MayastorServer {
       // capacity to 100 and used to 4.
       createPool: (call, cb) => {
         let args = call.request;
-        assertHasKeys(args, ['name', 'disks', 'blockSize'], ['blockSize']);
-        if (self.pools.find(p => p.name == args.name)) {
+        assertHasKeys(
+          args,
+          ['name', 'disks', 'blockSize', 'ioIf'],
+          ['blockSize', 'ioIf']
+        );
+        if (self.pools.find((p) => p.name == args.name)) {
           let err = new Error('already exists');
           err.code = grpc.status.ALREADY_EXISTS;
           cb(err);
@@ -86,7 +90,7 @@ class MayastorServer {
       destroyPool: (call, cb) => {
         let args = call.request;
         assertHasKeys(args, ['name']);
-        var idx = self.pools.findIndex(p => p.name == args.name);
+        var idx = self.pools.findIndex((p) => p.name == args.name);
         if (idx >= 0) {
           self.pools.splice(idx, 1);
           cb(null, {});
@@ -102,12 +106,12 @@ class MayastorServer {
       createReplica: (call, cb) => {
         let args = call.request;
         assertHasKeys(args, ['uuid', 'pool', 'size', 'thin', 'share']);
-        if (self.replicas.find(r => r.uuid == args.uuid)) {
+        if (self.replicas.find((r) => r.uuid == args.uuid)) {
           let err = new Error('already exists');
           err.code = grpc.status.ALREADY_EXISTS;
           return cb(err);
         }
-        let pool = self.pools.find(p => p.name == args.pool);
+        let pool = self.pools.find((p) => p.name == args.pool);
         if (!pool) {
           let err = new Error('pool not found');
           err.code = grpc.status.NOT_FOUND;
@@ -117,9 +121,9 @@ class MayastorServer {
           pool.used += args.size;
         }
         var uri;
-        if (args.share == 'NONE') {
+        if (args.share == 'REPLICA_NONE') {
           uri = 'bdev:///' + args.uuid;
-        } else if (args.share == 'ISCSI') {
+        } else if (args.share == 'REPLICA_ISCSI') {
           uri = 'iscsi://192.168.0.1:3800/' + args.uuid;
         } else {
           uri = 'nvmf://192.168.0.1:4020/' + args.uuid;
@@ -138,11 +142,11 @@ class MayastorServer {
       destroyReplica: (call, cb) => {
         var args = call.request;
         assertHasKeys(args, ['uuid']);
-        var idx = self.replicas.findIndex(r => r.uuid == args.uuid);
+        var idx = self.replicas.findIndex((r) => r.uuid == args.uuid);
         if (idx >= 0) {
           let r = self.replicas.splice(idx, 1)[0];
           if (!r.thin) {
-            var pool = self.pools.find(p => p.name == r.pool);
+            var pool = self.pools.find((p) => p.name == r.pool);
             pool.used -= r.size;
           }
           cb(null, {});
@@ -158,7 +162,7 @@ class MayastorServer {
       statReplicas: (_, cb) => {
         self.statCounter += STAT_DELTA;
         cb(null, {
-          replicas: self.replicas.map(r => {
+          replicas: self.replicas.map((r) => {
             return {
               uuid: r.uuid,
               pool: r.pool,
@@ -175,17 +179,17 @@ class MayastorServer {
       shareReplica: (call, cb) => {
         let args = call.request;
         assertHasKeys(args, ['uuid', 'share']);
-        let r = self.replicas.find(ent => ent.uuid == args.uuid);
+        let r = self.replicas.find((ent) => ent.uuid == args.uuid);
         if (!r) {
           let err = new Error('not found');
           err.code = grpc.status.NOT_FOUND;
           return cb(err);
         }
-        if (args.share == 'NONE') {
+        if (args.share == 'REPLICA_NONE') {
           r.uri = 'bdev:///' + r.uuid;
-        } else if (args.share == 'ISCSI') {
+        } else if (args.share == 'REPLICA_ISCSI') {
           r.uri = 'iscsi://192.168.0.1:3800/' + r.uuid;
-        } else if (args.share == 'NVMF') {
+        } else if (args.share == 'REPLICA_NVMF') {
           r.uri = 'nvmf://192.168.0.1:4020/' + r.uuid;
         } else {
           assert(false, 'Invalid share protocol');
@@ -198,7 +202,7 @@ class MayastorServer {
       createNexus: (call, cb) => {
         let args = call.request;
         assertHasKeys(args, ['uuid', 'size', 'children']);
-        if (self.nexus.find(r => r.uuid == args.uuid)) {
+        if (self.nexus.find((r) => r.uuid == args.uuid)) {
           let err = new Error('already exists');
           err.code = grpc.status.ALREADY_EXISTS;
           return cb(err);
@@ -207,7 +211,7 @@ class MayastorServer {
           uuid: args.uuid,
           size: args.size,
           state: 'online',
-          children: args.children.map(r => {
+          children: args.children.map((r) => {
             return {
               uri: r,
               state: 'online',
@@ -220,7 +224,7 @@ class MayastorServer {
       destroyNexus: (call, cb) => {
         var args = call.request;
         assertHasKeys(args, ['uuid']);
-        var idx = self.nexus.findIndex(n => n.uuid == args.uuid);
+        var idx = self.nexus.findIndex((n) => n.uuid == args.uuid);
         if (idx >= 0) {
           let n = self.nexus.splice(idx, 1)[0];
           cb(null, {});
@@ -235,8 +239,9 @@ class MayastorServer {
       },
       publishNexus: (call, cb) => {
         var args = call.request;
-        assertHasKeys(args, ['uuid', 'key'], ['key']);
-        var idx = self.nexus.findIndex(n => n.uuid == args.uuid);
+        assertHasKeys(args, ['uuid', 'share', 'key'], ['key']);
+        assert.equal(0, args.share); // Must be value of NEXUS_NBD for now
+        var idx = self.nexus.findIndex((n) => n.uuid == args.uuid);
         if (idx >= 0) {
           self.nexus[idx].devicePath = '/dev/nbd0';
           cb(null, {
@@ -251,7 +256,7 @@ class MayastorServer {
       unpublishNexus: (call, cb) => {
         var args = call.request;
         assertHasKeys(args, ['uuid']);
-        var idx = self.nexus.findIndex(n => n.uuid == args.uuid);
+        var idx = self.nexus.findIndex((n) => n.uuid == args.uuid);
         if (idx >= 0) {
           delete self.nexus[idx].devicePath;
           cb(null, {});
@@ -264,13 +269,13 @@ class MayastorServer {
       addChildNexus: (call, cb) => {
         var args = call.request;
         assertHasKeys(args, ['uuid', 'uri']);
-        var n = self.nexus.find(n => n.uuid == args.uuid);
+        var n = self.nexus.find((n) => n.uuid == args.uuid);
         if (!n) {
           let err = new Error('not found');
           err.code = grpc.status.NOT_FOUND;
           return cb(err);
         }
-        if (!n.children.find(ch => ch.uri == args.uri)) {
+        if (!n.children.find((ch) => ch.uri == args.uri)) {
           n.children.push({
             uri: args.uri,
             state: 'online',
@@ -281,13 +286,13 @@ class MayastorServer {
       removeChildNexus: (call, cb) => {
         var args = call.request;
         assertHasKeys(args, ['uuid', 'uri']);
-        var n = self.nexus.find(n => n.uuid == args.uuid);
+        var n = self.nexus.find((n) => n.uuid == args.uuid);
         if (!n) {
           let err = new Error('not found');
           err.code = grpc.status.NOT_FOUND;
           return cb(err);
         }
-        n.children = n.children.filter(ch => ch.uri != args.uri);
+        n.children = n.children.filter((ch) => ch.uri != args.uri);
         cb();
       },
       // dummy impl to silence the warning about unimplemented method

@@ -16,6 +16,10 @@ path = "src/bin/spdk.rs"
 name = "initiator"
 path = "src/bin/initiator.rs"
 
+[[bin]]
+name = "uring-support"
+path = "src/bin/uring-support.rs"
+
 [dev-dependencies]
 assert_matches = "1.2"
 run_script = "*"
@@ -49,3 +53,7 @@ async-task = "1.3.1"
 crossbeam = "0.7.3"
 pin-utils = "0.1.0-alpha.4"
 crossbeam-sync = "0.0.0"
+
+# grpc related
+
+tonic = "0.1"
