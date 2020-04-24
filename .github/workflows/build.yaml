@@ -7,7 +7,7 @@ on:
 jobs:
   Build:
     name: Build and run tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     container:
       image: docker.io/mayadata/ms-buildenv:nix
       options: --privileged -v /dev:/dev -v /bin:/host/bin -v /lib/modules:/lib/modules --cpus 2
@@ -24,6 +24,7 @@ jobs:
       - run: rm mayastor/.cargo/config
       - run: cargo build --all
       - run: ( cd jsonrpc && cargo test )
+      - run: ( cd nvmeadm && cargo test )
       - run: ( cd mayastor && cargo test -- --test-threads=1 )
       - run: ( cd mayastor-test && npm install && ./node_modules/mocha/bin/mocha test_cli.js )
       - run: ( cd mayastor-test && ./node_modules/mocha/bin/mocha test_replica.js )
@@ -33,7 +34,6 @@ jobs:
       - run: ( cd mayastor-test && TEST_PORT=10125 ./node_modules/mocha/bin/mocha test_nexus.js )
       - run: ( cd mayastor-test && ./node_modules/mocha/bin/mocha test_rebuild.js )
       - run: ( cd mayastor-test && TEST_PORT=10125 ./node_modules/mocha/bin/mocha test_rebuild.js )
-      - run: ( cd nvmeadm && cargo test )
   Image:
     # dont image if the build fails
     needs: Build
@@ -51,12 +51,3 @@ jobs:
           skipNixBuild: true
       - run: nix-build -A mayastorImage -o /tmp/mayastorImage
       - run: nix-build -A mayastorCSIImage -o /tmp/mayastorCSIImage
-  ms-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: cachix/install-nix-action@v7
-      - uses: cachix/cachix-action@v5
-        with:
-          name: mayastor
-          attributes: ms-buildenv
