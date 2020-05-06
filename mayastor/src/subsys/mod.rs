@@ -31,7 +31,7 @@ impl Default for MayastorSubsystem {
 
 impl MayastorSubsystem {
     extern "C" fn init() {
-        debug!("mayastor subsystem init");
+        dbg!("mayastor subsystem init");
 
         // write the config out to disk where the target is the same as source
         // if no config file is given, simply return Ok().
@@ -70,13 +70,13 @@ impl MayastorSubsystem {
             spdk_json_write_val_raw(
                 w,
                 data.as_ptr() as *const _,
-                data.as_bytes().len(),
+                data.as_bytes().len() as u64,
             );
         }
     }
 
     pub fn new() -> Self {
-        debug!("creating Mayastor subsystem...");
+        info!("creating Mayastor subsystem...");
         let mut ss = Box::new(spdk_subsystem::default());
         ss.name = std::ffi::CString::new(MAYASTOR_SUBSYS).unwrap().into_raw();
         ss.init = Some(Self::init);

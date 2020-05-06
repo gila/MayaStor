@@ -29,7 +29,7 @@ mkShell {
     nvme-cli
     pre-commit
     python3
-    rustChannel.${channel}.rust
+    #    rustChannel.${channel}.rust
   ] ++ mayastor.buildInputs;
 
   LIBCLANG_PATH = mayastor.LIBCLANG_PATH;
@@ -44,10 +44,10 @@ mkShell {
   # XXX: we can also not set this and change the paths
   # in wrapper.h? this only effects our bindings
 
-  C_INCLUDE_PATH = "${libspdk}/include/spdk";
+  #  C_INCLUDE_PATH = "${libspdk}/include/spdk";
 
   shellHook = ''
-    pre-commit install
+      pre-commit install
     figlet ${channel}
   '';
 }

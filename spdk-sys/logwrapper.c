@@ -6,6 +6,8 @@ maya_log(int level, const char *file, const int line, const char *func,
 {
     char buf[1024] = {0};
     int n_written = vsnprintf(buf, sizeof(buf), format, args);
+
+	printf("log: %s\n", buf);
     logfn(level, file, line, func, &buf[0], n_written);
 }
 

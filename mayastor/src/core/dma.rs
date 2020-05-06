@@ -24,7 +24,7 @@ pub struct DmaBuf {
     /// a raw pointer to the buffer
     buf: *mut c_void,
     /// the length of the allocated buffer
-    length: usize,
+    length: u64,
 }
 
 impl DmaBuf {
@@ -44,18 +44,18 @@ impl DmaBuf {
             std::ptr::write_bytes(
                 self.as_mut_slice().as_ptr() as *mut u8,
                 val,
-                self.length,
+                self.length as usize,
             )
         }
     }
 
     /// Allocate a buffer suitable for IO (wired and backed by huge page memory)
-    pub fn new(size: usize, alignment: u8) -> Result<Self, DmaError> {
+    pub fn new(size: u64, alignment: u8) -> Result<Self, DmaError> {
         let buf;
         unsafe {
             buf = spdk_dma_zmalloc(
                 size,
-                1 << alignment as usize,
+                1 << alignment as u64,
                 std::ptr::null_mut(),
             )
         };
@@ -71,7 +71,7 @@ impl DmaBuf {
     }
 
     /// Return length of the allocated buffer.
-    pub fn len(&self) -> usize {
+    pub fn len(&self) -> u64 {
         self.length
     }
 

@@ -99,7 +99,7 @@ impl RebuildTask {
         let segment_size_blks = (segment_size / block_size) as u64;
 
         let copy_buffer = source_hdl
-            .dma_malloc((segment_size_blks * block_size) as usize)
+            .dma_malloc(segment_size_blks * block_size)
             .context(NoCopyBuffer {})?;
 
         Ok(RebuildTask {
@@ -151,7 +151,7 @@ impl RebuildTask {
 
             self.copy_buffer = self
                 .source_hdl
-                .dma_malloc((self.segment_size_blks * self.block_size) as usize)
+                .dma_malloc(self.segment_size_blks * self.block_size)
                 .context(NoCopyBuffer {})?;
 
             info!(

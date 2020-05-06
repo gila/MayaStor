@@ -10,9 +10,10 @@
 , liburing
 , libuuid
 , nasm
+, ncurses
 , numactl
 , openssl
-, python
+, python3
 , rdma-core
 , stdenv
 }:
@@ -21,8 +22,8 @@ stdenv.mkDerivation rec {
   src = fetchFromGitHub {
     owner = "openebs";
     repo = "spdk";
-    rev = "bef8258c3116d8d427d46fab5985bb080ffb7666";
-    sha256 = "00xsfhlqiwnq3777xg8x6chcqr4nxhhqqmbsq1a2gng2iyhlpxzd";
+    rev = "3071500eac723c26cf283eeb671c5cba4b0e0623";
+    sha256 = "1g1ad7np0csyakfqcxy4k7hp2nsi1xnp063hxq9lyzbyxabdh4hi";
     fetchSubmodules = true;
   };
 
@@ -34,10 +35,11 @@ stdenv.mkDerivation rec {
     libiscsi.dev
     libuuid
     liburing
+    ncurses
     nasm
     numactl
     openssl
-    python
+    python3
   ] ++ stdenv.lib.optionals enableDebug [ cunit lcov ];
 
   # add this once we merged this new option from upstream. The tests are going

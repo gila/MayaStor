@@ -206,7 +206,7 @@ impl Nexus {
     ) -> Result<LabelData, LabelError> {
         let block_size = self.bdev.block_len() as u64;
         let mut buf = DmaBuf::new(
-            (GPTHeader::PARTITION_TABLE_SIZE + 2 * block_size) as usize,
+            GPTHeader::PARTITION_TABLE_SIZE + 2 * block_size,
             self.bdev.alignment(),
         )
         .context(WriteLabelAlloc {})?;
@@ -243,7 +243,7 @@ impl Nexus {
     ) -> Result<LabelData, LabelError> {
         let block_size = self.bdev.block_len() as u64;
         let mut buf = DmaBuf::new(
-            (GPTHeader::PARTITION_TABLE_SIZE + block_size) as usize,
+            GPTHeader::PARTITION_TABLE_SIZE + block_size,
             self.bdev.alignment(),
         )
         .context(WriteLabelAlloc {})?;

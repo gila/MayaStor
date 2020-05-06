@@ -17,22 +17,22 @@ use nix::errno::Errno;
 use snafu::{ResultExt, Snafu};
 
 use spdk_sys::{
+    iscsi_find_tgt_node,
+    iscsi_init_grp_create_from_initiator_list,
+    iscsi_init_grp_destroy,
+    iscsi_init_grp_find_by_tag,
+    iscsi_init_grp_unregister,
+    iscsi_portal_create,
+    iscsi_portal_grp_add_portal,
+    iscsi_portal_grp_create,
+    iscsi_portal_grp_find_by_tag,
+    iscsi_portal_grp_open,
+    iscsi_portal_grp_register,
+    iscsi_portal_grp_release,
+    iscsi_portal_grp_unregister,
+    iscsi_shutdown_tgt_node_by_name,
+    iscsi_tgt_node_construct,
     spdk_bdev_get_name,
-    spdk_iscsi_find_tgt_node,
-    spdk_iscsi_init_grp_create_from_initiator_list,
-    spdk_iscsi_init_grp_destroy,
-    spdk_iscsi_init_grp_find_by_tag,
-    spdk_iscsi_init_grp_unregister,
-    spdk_iscsi_portal_create,
-    spdk_iscsi_portal_grp_add_portal,
-    spdk_iscsi_portal_grp_create,
-    spdk_iscsi_portal_grp_find_by_tag,
-    spdk_iscsi_portal_grp_open,
-    spdk_iscsi_portal_grp_register,
-    spdk_iscsi_portal_grp_release,
-    spdk_iscsi_portal_grp_unregister,
-    spdk_iscsi_shutdown_tgt_node_by_name,
-    spdk_iscsi_tgt_node_construct,
 };
 
 use crate::{
@@ -154,7 +154,7 @@ fn share_as_iscsi_target(
     });
 
     let tgt = unsafe {
-        spdk_iscsi_tgt_node_construct(
+        iscsi_tgt_node_construct(
             idx,                   // target_index
             c_iqn.as_ptr(),        // name
             ptr::null(),           // alias
@@ -215,7 +215,7 @@ pub async fn unshare(bdev_name: &str) -> Result<()> {
     info!("Destroying iscsi target {}", iqn);
 
     unsafe {
-        spdk_iscsi_shutdown_tgt_node_by_name(
+        iscsi_shutdown_tgt_node_by_name(
             c_iqn.as_ptr(),
             Some(done_errno_cb),
             cb_arg(sender),
@@ -230,7 +230,7 @@ pub async fn unshare(bdev_name: &str) -> Result<()> {
 }
 
 fn initiator_group_exists(tag: i32) -> bool {
-    if unsafe { spdk_iscsi_init_grp_find_by_tag(tag).is_null() } {
+    if unsafe { iscsi_init_grp_find_by_tag(tag).is_null() } {
         return false;
     }
 
@@ -253,7 +253,7 @@ fn create_initiator_group(ig_idx: c_int) -> Result<()> {
     let initiator_netmask = CString::new("ANY").unwrap();
 
     unsafe {
-        if spdk_iscsi_init_grp_create_from_initiator_list(
+        if iscsi_init_grp_create_from_initiator_list(
             ig_idx,
             1,
             &mut (initiator_host.as_ptr() as *mut c_char) as *mut _,
@@ -270,16 +270,16 @@ fn create_initiator_group(ig_idx: c_int) -> Result<()> {
 
 fn destroy_initiator_group(ig_idx: c_int) {
     unsafe {
-        let ig = spdk_iscsi_init_grp_unregister(ig_idx);
+        let ig = iscsi_init_grp_unregister(ig_idx);
         if !ig.is_null() {
-            spdk_iscsi_init_grp_destroy(ig);
+            iscsi_init_grp_destroy(ig);
         }
     }
 }
 
 /// determine if a portal group exists by trying to find it by its tag
 fn portal_exists(tag: i32) -> bool {
-    if unsafe { spdk_iscsi_portal_grp_find_by_tag(tag).is_null() } {
+    if unsafe { iscsi_portal_grp_find_by_tag(tag).is_null() } {
         return false;
     }
 
@@ -298,26 +298,23 @@ fn create_portal_group(
 
     let portal_port = CString::new(port_no.to_string()).unwrap();
     let portal_host = CString::new(address.to_owned()).unwrap();
-    let pg = unsafe { spdk_iscsi_portal_grp_create(pg_no) };
+    let pg = unsafe { iscsi_portal_grp_create(pg_no) };
     if pg.is_null() {
         return Err(Error::CreatePortalGroup {});
     }
     unsafe {
-        let p = spdk_iscsi_portal_create(
-            portal_host.as_ptr(),
-            portal_port.as_ptr(),
-        );
+        let p = iscsi_portal_create(portal_host.as_ptr(), portal_port.as_ptr());
         if p.is_null() {
-            spdk_iscsi_portal_grp_release(pg);
+            iscsi_portal_grp_release(pg);
             return Err(Error::CreatePortal {});
         }
-        spdk_iscsi_portal_grp_add_portal(pg, p);
-        if spdk_iscsi_portal_grp_open(pg) != 0 {
-            spdk_iscsi_portal_grp_release(pg);
+        iscsi_portal_grp_add_portal(pg, p);
+        if iscsi_portal_grp_open(pg) != 0 {
+            iscsi_portal_grp_release(pg);
             return Err(Error::AddPortal {});
         }
-        if spdk_iscsi_portal_grp_register(pg) != 0 {
-            spdk_iscsi_portal_grp_release(pg);
+        if iscsi_portal_grp_register(pg) != 0 {
+            iscsi_portal_grp_release(pg);
             return Err(Error::RegisterPortalGroup {});
         }
     }
@@ -330,9 +327,9 @@ fn create_portal_group(
 
 fn destroy_portal_group(pg_idx: c_int) {
     unsafe {
-        let pg = spdk_iscsi_portal_grp_unregister(pg_idx);
+        let pg = iscsi_portal_grp_unregister(pg_idx);
         if !pg.is_null() {
-            spdk_iscsi_portal_grp_release(pg);
+            iscsi_portal_grp_release(pg);
         }
     }
 }
@@ -341,7 +338,7 @@ fn destroy_portal_group(pg_idx: c_int) {
 pub fn get_uri(side: Side, bdev_name: &str) -> Option<String> {
     let iqn = target_name(bdev_name);
     let c_iqn = CString::new(iqn.clone()).unwrap();
-    let tgt = unsafe { spdk_iscsi_find_tgt_node(c_iqn.as_ptr()) };
+    let tgt = unsafe { iscsi_find_tgt_node(c_iqn.as_ptr()) };
 
     if tgt.is_null() {
         return None;

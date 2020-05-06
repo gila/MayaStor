@@ -486,6 +486,7 @@ impl MayastorEnvironment {
         args.push(CString::new("--log-level=lib.cryptodev:0").unwrap());
         args.push(CString::new("--log-level=user1:6").unwrap());
         args.push(CString::new("--match-allocations").unwrap());
+        args.push(CString::new("--iova-mode=pa").unwrap());
 
         // any additional parameters we want to pass down to the eal. These
         // arguments are not checked or validated.
@@ -542,9 +543,10 @@ impl MayastorEnvironment {
             spdk_log_set_level(self.debug_level);
             spdk_log_set_print_level(self.print_level);
             // open our log implementation which is implemented in the wrapper
-            spdk_log_open(Some(maya_log));
+            //spdk_log_open(Some(maya_log));
+            spdk_log_open(None);
             // our callback called defined in rust called by our wrapper
-            spdk_sys::logfn = Some(logger::log_impl);
+            //spdk_sys::logfn = Some(logger::log_impl);
         }
         Ok(())
     }
@@ -631,6 +633,7 @@ impl MayastorEnvironment {
         } else {
             Config::get_or_init(Config::default)
         };
+        dbg!(cfg);
         cfg.apply();
     }
     /// initialize the core, call this before all else
@@ -645,7 +648,6 @@ impl MayastorEnvironment {
         self.initialize_eal();
 
         // setup the logger as soon as possible
-        self.init_logger().unwrap();
         if self.enable_coredump {
             //TODO
             warn!("rlimit configuration not implemented");

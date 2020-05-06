@@ -43,10 +43,10 @@ impl Nexus {
         // variant says we should be, carry on to correct the state.
         match self.nexus_target {
             Some(NexusTarget::NbdDisk(ref nbd_disk)) => {
-                if share_protocol != ShareProtocolNexus::NexusNbd {
-                    return Err(Error::AlreadyShared {
+                return if share_protocol != ShareProtocolNexus::NexusNbd {
+                    Err(Error::AlreadyShared {
                         name: self.name.clone(),
-                    });
+                    })
                 } else {
                     warn!("{} is already shared", self.name);
                     return Ok(nbd_disk.as_uri());
@@ -85,6 +85,8 @@ impl Nexus {
                     cname.as_ptr(),
                     flavour.as_ptr(),
                     key.as_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                 )
             };
             errno_result_from_i32(name, errno).context(CreateCryptoBdev {

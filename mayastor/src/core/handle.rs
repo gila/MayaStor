@@ -72,7 +72,7 @@ impl BdevHandle {
 
     /// Allocate memory from the memory pool (the mem is zeroed out)
     /// with given size and proper alignment for the bdev.
-    pub fn dma_malloc(&self, size: usize) -> Result<DmaBuf, DmaError> {
+    pub fn dma_malloc(&self, size: u64) -> Result<DmaBuf, DmaError> {
         DmaBuf::new(size, self.desc.get_bdev().alignment())
     }
 
@@ -101,7 +101,7 @@ impl BdevHandle {
         &self,
         offset: u64,
         buffer: &DmaBuf,
-    ) -> Result<usize, CoreError> {
+    ) -> Result<u64, CoreError> {
         let (s, r) = oneshot::channel::<bool>();
         let errno = unsafe {
             spdk_bdev_write(
@@ -124,7 +124,7 @@ impl BdevHandle {
         }
 
         if r.await.expect("Failed awaiting write IO") {
-            Ok(buffer.len() as usize)
+            Ok(buffer.len())
         } else {
             Err(CoreError::WriteFailed {
                 offset,
@@ -138,7 +138,7 @@ impl BdevHandle {
         &self,
         offset: u64,
         buffer: &mut DmaBuf,
-    ) -> Result<usize, CoreError> {
+    ) -> Result<u64, CoreError> {
         let (s, r) = oneshot::channel::<bool>();
         let errno = unsafe {
             spdk_bdev_read(

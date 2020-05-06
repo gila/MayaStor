@@ -284,9 +284,8 @@ impl NexusChild {
 
         //
         // Protective MBR
-        let mut buf = desc
-            .dma_malloc(block_size as usize)
-            .context(LabelAlloc {})?;
+        let mut buf =
+            desc.dma_malloc(block_size as u64).context(LabelAlloc {})?;
         self.read_at(0, &mut buf).await.context(MbrRead {})?;
         let mbr = NexusLabel::read_mbr(&buf).context(MbrInvalid {})?;
 
@@ -380,7 +379,7 @@ impl NexusChild {
             block_size,
         );
         let mut buf = desc
-            .dma_malloc(size as usize)
+            .dma_malloc(size as u64)
             .context(PartitionTableAlloc {})?;
         let offset = active.lba_table * u64::from(block_size);
         self.read_at(offset, &mut buf)
@@ -427,7 +426,7 @@ impl NexusChild {
         &self,
         offset: u64,
         buf: &DmaBuf,
-    ) -> Result<usize, ChildIoError> {
+    ) -> Result<u64, ChildIoError> {
         match self.bdev_handle.as_ref() {
             Some(desc) => {
                 Ok(desc.write_at(offset, buf).await.context(WriteError {
@@ -445,7 +444,7 @@ impl NexusChild {
         &self,
         offset: u64,
         buf: &mut DmaBuf,
-    ) -> Result<usize, ChildIoError> {
+    ) -> Result<u64, ChildIoError> {
         match self.bdev_handle.as_ref() {
             Some(desc) => {
                 Ok(desc.read_at(offset, buf).await.context(ReadError {

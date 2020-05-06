@@ -173,13 +173,13 @@ impl Subsystem {
         }
         spdk_nvmf_subsystem_set_allow_any_host(inner, true);
 
-        // make it listen on target's trid
-        if spdk_nvmf_subsystem_add_listener(inner, trid) != 0 {
-            return Err(Error::ListenSubsystem {
-                nqn,
-            });
-        }
-
+        // make it listen on target's trid TODO: callback
+        spdk_nvmf_subsystem_add_listener(
+            inner,
+            trid,
+            None,
+            std::ptr::null_mut(),
+        );
         Ok(Self {
             inner,
             nqn,
@@ -473,20 +473,16 @@ impl Target {
     }
 
     /// Listen for incoming connections
-    pub async fn listen(&mut self) -> Result<()> {
-        let (sender, receiver) = oneshot::channel::<ErrnoResult<()>>();
-        unsafe {
-            spdk_nvmf_tgt_listen(
-                self.inner,
-                &mut self.trid as *mut _,
-                Some(done_errno_cb),
-                cb_arg(sender),
-            );
+    pub fn listen(&mut self) -> Result<()> {
+        let rc = unsafe {
+            spdk_nvmf_tgt_listen(self.inner, &mut self.trid as *mut _)
+        };
+
+        if rc != 0 {
+            return Err(Error::ListenTarget {
+                source: Errno::from_i32(rc),
+            });
         }
-        receiver
-            .await
-            .expect("Cancellation is not supported")
-            .context(ListenTarget {})?;
         debug!("nvmf target listening on {}", self);
         Ok(())
     }
@@ -606,9 +602,15 @@ impl Target {
             unsafe { spdk_poller_unregister(&mut self.acceptor_poller) };
         }
 
-        // stop io processing
+        // Stop polling for new IO
         if !self.pg.is_null() {
-            unsafe { spdk_nvmf_poll_group_destroy(self.pg) };
+            unsafe {
+                spdk_nvmf_poll_group_destroy(
+                    self.pg,
+                    None,
+                    std::ptr::null_mut(),
+                )
+            };
         }
 
         // first we need to inactivate all subsystems of the target
@@ -662,9 +664,12 @@ impl fmt::Display for Target {
 /// Create nvmf target which will be used for exporting the replicas.
 pub async fn init(address: &str) -> Result<()> {
     let nvmf_port = Config::by_ref().nexus_opts.replica_port;
+    dbg!(Config::by_ref());
     let mut boxed_tgt = Box::new(Target::create(address, nvmf_port)?);
-    boxed_tgt.add_tcp_transport().await?;
-    boxed_tgt.listen().await?;
+    dbg!(boxed_tgt.add_tcp_transport().await?);
+    boxed_tgt
+        .listen()
+        .unwrap_or_else(|_| panic!("failed to listen on {}", nvmf_port));
     boxed_tgt.accept()?;
 
     NVMF_TGT.with(move |nvmf_tgt| {
