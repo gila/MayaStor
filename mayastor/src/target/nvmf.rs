@@ -664,9 +664,8 @@ impl fmt::Display for Target {
 /// Create nvmf target which will be used for exporting the replicas.
 pub async fn init(address: &str) -> Result<()> {
     let nvmf_port = Config::by_ref().nexus_opts.replica_port;
-    dbg!(Config::by_ref());
     let mut boxed_tgt = Box::new(Target::create(address, nvmf_port)?);
-    dbg!(boxed_tgt.add_tcp_transport().await?);
+    boxed_tgt.add_tcp_transport().await?;
     boxed_tgt
         .listen()
         .unwrap_or_else(|_| panic!("failed to listen on {}", nvmf_port));

@@ -86,6 +86,7 @@ stdenv.mkDerivation rec {
   postBuild = ''
     find . -type f -name 'libspdk_ut_mock.a' -delete
     find . -type f -name 'librte_vhost.a' -delete
+    find . -type f -name 'libspdk_event_nvmf.a' -delete
 
     $CC -shared -o libspdk.so \
     -lc  -laio -liscsi -lnuma -ldl -lrt -luuid -lpthread -lcrypto -luring \

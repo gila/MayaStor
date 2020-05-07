@@ -29,8 +29,13 @@
 //! is used for holding on to the messages while it is being processed. Once
 //! processed (or completed) it is dropped from the queue. Unlike the native
 //! SPDK messages, these futures -- are allocated before they execute.
-use spdk_sys::spdk_get_thread;
-use std::{cell::Cell, os::raw::c_void, pin::Pin, slice::Iter, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    os::raw::c_void,
+    pin::Pin,
+    slice::Iter,
+    time::Duration,
+};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::{
@@ -43,16 +48,19 @@ use once_cell::sync::OnceCell;
 use spdk_sys::{
     spdk_env_thread_launch_pinned,
     spdk_env_thread_wait_all,
-    spdk_thread_lib_init,
+    spdk_get_thread,
+    spdk_thread,
+    spdk_thread_lib_init_ext,
 };
 
 use crate::core::{Cores, Mthread};
 
 pub(crate) const INIT: usize = 1;
-pub(crate) const RUNNING: usize = 1 << 1;
-pub(crate) const SHUTDOWN: usize = 1 << 2;
-pub(crate) const SUSPEND: usize = 1 << 3;
-pub(crate) const DEVELOPER_DELAY: usize = 1 << 4;
+pub(crate) const BOOTSTRAP: usize = 1 << 2;
+pub(crate) const RUNNING: usize = 1 << 3;
+pub(crate) const SHUTDOWN: usize = 1 << 4;
+pub(crate) const SUSPEND: usize = 1 << 5;
+pub(crate) const DEVELOPER_DELAY: usize = 1 << 6;
 
 #[derive(Debug)]
 pub struct Reactors(Vec<Reactor>);
@@ -66,8 +74,12 @@ pub static REACTOR_LIST: OnceCell<Reactors> = OnceCell::new();
 #[repr(C, align(64))]
 #[derive(Debug)]
 pub struct Reactor {
-    /// vector of threads allocated by the various subsystems
-    threads: Vec<Mthread>,
+    /// Vector of threads allocated by the various subsystems
+    /// as threads can come and go, we need refcell here to
+    /// avoid the need for unsafety. Its not clear yet what it will
+    /// do with performance as we keep track of any outstanding
+    /// borrows
+    threads: RefCell<Vec<Mthread>>,
     /// the logical core this reactor is created on
     lcore: u32,
     /// represents the state of the reactor
@@ -84,12 +96,42 @@ thread_local! {
 }
 
 impl Reactors {
+    /// advertise what scheduling options we support
+    extern "C" fn can_op(op: spdk_sys::spdk_thread_op) -> bool {
+        match op {
+            spdk_sys::SPDK_THREAD_OP_NEW => true,
+            _ => false,
+        }
+    }
+
+    /// do the advertised scheduling option
+    extern "C" fn do_op(
+        thread: *mut spdk_thread,
+        op: spdk_sys::spdk_thread_op,
+    ) -> i32 {
+        match op {
+            spdk_sys::SPDK_THREAD_OP_NEW => Self::schedule(thread),
+            _ => -1,
+        }
+    }
+
+    /// schedule a thread in here,we should make smart choices based
+    /// on load etc
+    fn schedule(thread: *mut spdk_sys::spdk_thread) -> i32 {
+        Reactors::current()
+            .threads
+            .borrow_mut()
+            .push(Mthread(thread));
+        0
+    }
     /// initialize the reactor subsystem for each core assigned to us
     pub fn init() {
-        REACTOR_LIST.get_or_init(|| {
-            let rc = unsafe { spdk_thread_lib_init(None, 0) };
-            assert_eq!(rc, 0);
+        let rc = unsafe {
+            spdk_thread_lib_init_ext(Some(Self::do_op), Some(Self::can_op), 0)
+        };
 
+        assert_eq!(rc, 0);
+        REACTOR_LIST.get_or_init(|| {
             Reactors(
                 Cores::count()
                     .into_iter()
@@ -171,19 +213,25 @@ impl<'a> IntoIterator for &'a Reactors {
 impl Reactor {
     /// create a new ['Reactor'] instance
     fn new(core: u32) -> Self {
-        // allocate a new thread which provides the SPDK context
-        let t = Mthread::new(format!("core_{}", core));
-        // create a channel to receive futures on
         let (sx, rx) =
             unbounded::<Pin<Box<dyn Future<Output = ()> + 'static>>>();
 
-        Self {
-            threads: vec![t],
+        let reactor = Self {
+            threads: RefCell::from(Vec::new()),
             lcore: core,
             flags: Cell::new(INIT),
             sx,
             rx,
-        }
+        };
+
+        // we want to create a thread, but we cant yet, so defer this until we
+        // are able to
+        reactor.send_future(async {
+            let _ = Mthread::new(format!("core_{}", Reactors::current().lcore));
+            dbg!("dispatched future");
+        });
+
+        reactor
     }
 
     /// this function gets called by DPDK
@@ -273,11 +321,11 @@ impl Reactor {
                     return output;
                 }
                 Poll::Pending => {
-                    assert_eq!(reactor.threads[0].0, unsafe {
+                    assert_eq!(reactor.threads.borrow()[0].0, unsafe {
                         spdk_get_thread()
                     });
                     reactor.run_futures();
-                    reactor.threads[0].poll();
+                    reactor.threads.borrow()[0].poll();
                 }
             }
         }
@@ -353,7 +401,7 @@ impl Reactor {
         debug!("initiating shutdown for core {}", Cores::current());
         // clean up the threads, threads can only be destroyed during shutdown
         // in the rest of SPDK
-        self.threads.iter().for_each(|t| t.destroy());
+        self.threads.borrow().iter().for_each(|t| t.destroy());
 
         if self.lcore == Cores::first() {
             debug!("master core stopped polling");
@@ -364,7 +412,7 @@ impl Reactor {
     /// the context of any thread. We always need to set a context before we
     /// can process, or submit any messages.
     pub fn thread_enter(&self) {
-        self.threads[0].enter();
+        self.threads.borrow()[0].enter();
     }
 
     /// polls the reactor only once for any work regardless of its state. For
@@ -374,7 +422,7 @@ impl Reactor {
         self.run_futures();
 
         // poll any thread for events
-        self.threads.iter().for_each(|t| {
+        self.threads.borrow().iter().for_each(|t| {
             t.poll();
         });
 
@@ -396,7 +444,7 @@ impl Future for &'static Reactor {
             SHUTDOWN => {
                 info!("future reactor {} shutdown requested", self.lcore);
 
-                self.threads.iter().for_each(|t| t.destroy());
+                self.threads.borrow().iter().for_each(|t| t.destroy());
                 unsafe { spdk_env_thread_wait_all() };
                 Poll::Ready(Err(()))
             }

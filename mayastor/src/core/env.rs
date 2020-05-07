@@ -543,10 +543,9 @@ impl MayastorEnvironment {
             spdk_log_set_level(self.debug_level);
             spdk_log_set_print_level(self.print_level);
             // open our log implementation which is implemented in the wrapper
-            //spdk_log_open(Some(maya_log));
-            spdk_log_open(None);
+            spdk_log_open(Some(maya_log));
             // our callback called defined in rust called by our wrapper
-            //spdk_sys::logfn = Some(logger::log_impl);
+            spdk_sys::logfn = Some(logger::log_impl);
         }
         Ok(())
     }
@@ -633,7 +632,6 @@ impl MayastorEnvironment {
         } else {
             Config::get_or_init(Config::default)
         };
-        dbg!(cfg);
         cfg.apply();
     }
     /// initialize the core, call this before all else
@@ -648,6 +646,8 @@ impl MayastorEnvironment {
         self.initialize_eal();
 
         // setup the logger as soon as possible
+        self.init_logger().unwrap();
+
         if self.enable_coredump {
             //TODO
             warn!("rlimit configuration not implemented");
@@ -676,6 +676,8 @@ impl MayastorEnvironment {
         // register our RPC methods
         crate::pool::register_pool_methods();
         crate::replica::register_replica_methods();
+
+        Reactors::master().poll_once();
 
         // init the subsystems
         Reactor::block_on(async {

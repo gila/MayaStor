@@ -44,7 +44,7 @@ mkShell {
   # XXX: we can also not set this and change the paths
   # in wrapper.h? this only effects our bindings
 
-  #  C_INCLUDE_PATH = "${libspdk}/include/spdk";
+  C_INCLUDE_PATH = "${libspdk}/include/spdk";
 
   shellHook = ''
       pre-commit install
