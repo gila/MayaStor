@@ -274,20 +274,20 @@ async fn do_shutdown(arg: *mut c_void) {
     *GLOBAL_RC.lock().unwrap() = rc;
 
     let cfg = Config::by_ref();
-    if cfg.nexus_opts.iscsi_enable {
-        target::iscsi::fini();
-        debug!("iSCSI target down");
-    };
-
-    if cfg.nexus_opts.nvmf_enable {
-        let f = async move {
-            if let Err(msg) = target::nvmf::fini().await {
-                error!("Failed to finalize nvmf target: {}", msg);
-            }
-            debug!("nvmf target down");
-        };
-        f.await;
-    }
+    // if cfg.nexus_opts.iscsi_enable {
+    //     target::iscsi::fini();
+    //     debug!("iSCSI target down");
+    // };
+    //
+    // if cfg.nexus_opts.nvmf_enable {
+    //     let f = async move {
+    //         if let Err(msg) = target::nvmf::fini().await {
+    //             error!("Failed to finalize nvmf target: {}", msg);
+    //         }
+    //         debug!("nvmf target down");
+    //     };
+    //     f.await;
+    // }
 
     unsafe {
         spdk_rpc_finish();
@@ -613,7 +613,10 @@ impl MayastorEnvironment {
             spdk_rpc_set_state(SPDK_RPC_RUNTIME);
         };
 
-        Self::target_init().unwrap();
+        //Self::target_init().unwrap();
+
+        // load any bdevs that need to be created
+        //Config::by_ref().import_bdevs();
     }
 
     fn load_yaml_config(&self) {
@@ -685,9 +688,6 @@ impl MayastorEnvironment {
                 spdk_subsystem_init(Some(Self::start_rpc), rpc.into_raw() as _);
             }
         });
-
-        // load any bdevs that need to be created
-        Config::by_ref().import_bdevs();
 
         self
     }
