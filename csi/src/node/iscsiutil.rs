@@ -1,11 +1,75 @@
+use crate::node::device_uri::{Attach, DevicePathError, DeviceType};
 use once_cell::sync::Lazy;
 use std::{env, path::Path, process::Command, thread, time};
+use url::{ParseError, Url};
+
+#[derive(Debug)]
+pub struct IscsiDisk {
+    flavour: DeviceType,
+    host: String,
+    port: u16,
+    iqn: String,
+    lun_id: u16,
+}
+
+impl IscsiDisk {
+    /// parse the given URL into ['IscsiDisk']
+    pub(crate) fn new(uri: Url) -> Result<Self, DevicePathError> {
+        assert_eq!(uri.scheme(), "iscsi");
+
+        if let Some(host) = uri.host_str() {
+            Ok(Self {
+                flavour: DeviceType::IScsi,
+                host: host.to_string(),
+                port: uri.port().unwrap_or(3260),
+                iqn: match uri
+                    .path_segments()
+                    .map(std::iter::Iterator::collect::<Vec<_>>)
+                {
+                    None => {
+                        return Err(DevicePathError::UriInvalid {
+                            source: ParseError::IdnaError,
+                            uri: uri.to_string(),
+                        })
+                    }
+                    Some(s) => s[0].to_string(),
+                },
+                // we always use lun ID 0
+                lun_id: 0,
+            })
+        } else {
+            Err(DevicePathError::UriInvalid {
+                source: ParseError::EmptyHost,
+                uri: uri.to_string(),
+            })
+        }
+    }
+}
+
+impl Attach for IscsiDisk {
+    fn attach(&self) -> bool {
+        true
+    }
+
+    fn www_id(&self) {}
+}
+
+#[test]
+fn iscsi_parse_test() {
+    use crate::node::device_uri::DevicePath;
+    let uri = "iscsi://127.0.0.1:3260/iqn.2019-05.openebs.io:nexus-b4c0894c-c74a-4ec8-be29-4e3cd6aae125/0";
+    let dev = DevicePath::parse(uri).unwrap();
+    dev.www_id();
+    assert_eq!(dev.attach(), true);
+    dbg!(&dev);
+}
 
 // The iscsiadm executable invoked is dependent on the environment.
 // For the container we set it using and environment variable,
 // typically this is the "/bin/mayastor-iscsiadm" script,
 // created by the mayastor image build scripts.
 // For development hosts just setting it to iscsiadm works.
+
 static ISCSIADM: Lazy<String> = Lazy::new(|| {
     if env::var("ISCSIADM").is_err() {
         debug!("defaulting to using iscsiadm");

@@ -450,6 +450,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "snafu",
  "sys-mount",
  "tokio",
  "tonic",

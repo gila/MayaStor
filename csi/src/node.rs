@@ -15,6 +15,7 @@ use git_version::git_version;
 
 mod iscsiutil;
 use iscsiutil::{iscsi_attach_disk, iscsi_detach_disk, iscsi_find};
+mod device_uri;
 
 #[derive(Clone, Debug)]
 pub struct Node {
