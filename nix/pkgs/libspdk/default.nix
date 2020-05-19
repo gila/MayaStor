@@ -47,8 +47,6 @@ stdenv.mkDerivation rec {
   #${enableFeature enableDebug "unit-tests"}
 
   configureFlags = [
-    "${enableFeature enableDebug "debug"}"
-    "${enableFeature enableDebug "tests"}"
     "--without-isal"
     "--with-iscsi-initiator"
     "--with-internal-vhost-lib"

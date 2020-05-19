@@ -596,17 +596,12 @@ pub(crate) async fn create_pool(
             name: disk.clone(),
         });
     }
-    // The block size may be missing or explicitly set to zero. In
-    // both cases we want to provide our own default value instead
-    // of SPDK's default which is 512.
-    //
-    // NOTE: Keep this in sync with nexus block size.
-    // Block sizes greater than 512 currently break the iscsi target,
-    // so for now we default size to 512.
     let mut block_size = args.block_size; //.unwrap_or(0);
+
     if block_size == 0 {
-        block_size = 512;
+        block_size = 4096
     }
+
     let io_if = match PoolIoIf::from_i32(args.io_if) {
         Some(val) => val,
         None => {
