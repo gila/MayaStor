@@ -25,7 +25,7 @@ use crate::{
     core::Bdev,
     ffihelper::{cb_arg, done_errno_cb, errno_result_from_i32, ErrnoResult},
 };
-
+use tracing::instrument;
 /// we are using the multi buffer encryption implementation using CBC as the
 /// algorithm
 const CRYPTO_FLAVOUR: &str = "crypto_aesni_mb";
@@ -158,6 +158,7 @@ impl Nexus {
     /// where the top-level dev is claimed by the subsystem that exports the
     /// bdev. As such, we must first destroy the share and move our way down
     /// from there.
+    #[instrument]
     pub async fn unshare(&mut self) -> Result<(), Error> {
         match self.nexus_target.take() {
             Some(NexusTarget::NbdDisk(disk)) => {
