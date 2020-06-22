@@ -223,13 +223,25 @@ impl Nexus {
             None => return Ok(()),
             Some(val) => val,
         };
+        self.children[idx].close();
+        assert_eq!(self.children[idx].state, ChildState::Closed);
+        //+        self.children[idx].state = ChildState::Closed;
+        //+        self.reconfigure(DREvent::ChildRemove).await;
 
-        self.children[idx].state = ChildState::Closed;
+        // let mut child = self.children.remove(idx);
+        //         child.close();
+        //         child
+        //                 .destroy()
+        //                 .await
+        //                 .context(DestroyChild {
+        //                     name: self.name.clone(),
+        //                 child: uri,
+        //             })
+        //             .unwrap();
+
+        self.child_count -= 1;
         self.reconfigure(DREvent::ChildRemove).await;
-
-        let mut child = self.children.remove(idx);
-        child.close();
-        child
+        self.children[idx]
             .destroy()
             .await
             .context(DestroyChild {
@@ -237,9 +249,24 @@ impl Nexus {
                 child: uri,
             })
             .unwrap();
-
-        self.child_count -= 1;
         Ok(())
+
+        // self.children[idx].state = ChildState::Closed;
+        // self.reconfigure(DREvent::ChildRemove).await;
+        //
+        // let mut child = self.children.remove(idx);
+        // child.close();
+        // child
+        //     .destroy()
+        //     .await
+        //     .context(DestroyChild {
+        //         name: self.name.clone(),
+        //         child: uri,
+        //     })
+        //     .unwrap();
+        //
+        // self.child_count -= 1;
+        // Ok(())
     }
 
     /// offline a child device and reconfigure the IO channels

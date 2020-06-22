@@ -345,6 +345,7 @@ impl NexusChild {
         let desc = self.desc.take().unwrap();
         drop(hdl);
         info!("recnt {:?}", Arc::strong_count(&desc));
+        //assert_eq!(Arc::strong_count(&desc), 1);
         drop(desc);
 
         // we leave the child structure around for when we want reopen it
