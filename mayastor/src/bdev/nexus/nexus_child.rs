@@ -342,8 +342,9 @@ impl NexusChild {
 
         // just to be explicit
         let hdl = self.bdev_handle.take();
-        let desc = self.desc.take();
+        let desc = self.desc.take().unwrap();
         drop(hdl);
+        info!("recnt {:?}", Arc::strong_count(&desc));
         drop(desc);
 
         // we leave the child structure around for when we want reopen it

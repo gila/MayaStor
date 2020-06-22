@@ -89,27 +89,27 @@ impl NexusChannelInner {
             .children
             .iter_mut()
             .filter(|c| c.status() == ChildStatus::Online)
-            .map(|c| {
+            .for_each(|c| {
+                info!("opening new channel for {:?}", c);
                 self.ch.push(
                     BdevHandle::try_from(c.get_descriptor().unwrap()).unwrap(),
                 )
-            })
-            .for_each(drop);
+            });
 
-        if !self.ch.is_empty() {
-            nexus
-                .children
-                .iter_mut()
-                .filter(|c| c.rebuilding())
-                .map(|c| {
-                    self.write_only += 1;
-                    self.ch.push(
-                        BdevHandle::try_from(c.get_descriptor().unwrap())
-                            .unwrap(),
-                    )
-                })
-                .for_each(drop);
-        }
+        // if !self.ch.is_empty() {
+        //     nexus
+        //         .children
+        //         .iter_mut()
+        //         .filter(|c| c.rebuilding())
+        //         .map(|c| {
+        //             self.write_only += 1;
+        //             self.ch.push(
+        //                 BdevHandle::try_from(c.get_descriptor().unwrap())
+        //                     .unwrap(),
+        //             )
+        //         })
+        //         .for_each(drop);
+        // }
 
         trace!(
             "{}: New number of IO channels {} out of {} children",

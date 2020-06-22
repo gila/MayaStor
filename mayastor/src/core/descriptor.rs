@@ -18,6 +18,7 @@ use crate::{
     bdev::nexus::nexus_module::NEXUS_MODULE,
     core::{channel::IoChannel, Bdev, BdevHandle, CoreError},
 };
+use std::sync::Arc;
 
 /// NewType around a descriptor, multiple descriptor to the same bdev is
 /// allowed. A bdev can me claimed for exclusive write access. Any existing
@@ -161,7 +162,7 @@ impl Descriptor {
 
 impl Drop for Descriptor {
     fn drop(&mut self) {
-        trace!("[D] {:?}", self);
+        info!("[D] {:?}", self);
         unsafe {
             spdk_bdev_close(self.0);
         }

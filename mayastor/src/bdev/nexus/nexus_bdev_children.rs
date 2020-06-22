@@ -224,16 +224,22 @@ impl Nexus {
             Some(val) => val,
         };
 
-        self.children[idx].close();
-        assert_eq!(self.children[idx].state, ChildState::Closed);
+        self.children[idx].state = ChildState::Closed;
+        self.reconfigure(DREvent::ChildRemove).await;
 
         let mut child = self.children.remove(idx);
+        child.close();
+        child
+            .destroy()
+            .await
+            .context(DestroyChild {
+                name: self.name.clone(),
+                child: uri,
+            })
+            .unwrap();
+
         self.child_count -= 1;
-        self.reconfigure(DREvent::ChildRemove).await;
-        child.destroy().await.context(DestroyChild {
-            name: self.name.clone(),
-            child: uri,
-        })
+        Ok(())
     }
 
     /// offline a child device and reconfigure the IO channels
