@@ -1,6 +1,7 @@
 { stdenv
 , clang
 , dockerTools
+, lib
 , libaio
 , libiscsi
 , libspdk
@@ -22,12 +23,35 @@ let
     rustc = channel.stable.rust;
     cargo = channel.stable.cargo;
   };
+
+  whitelistSource = src: allowedPrefixes:
+    builtins.filterSource
+      (path: type:
+        lib.any
+          (allowedPrefix:
+            lib.hasPrefix (toString (src + "/${allowedPrefix}")) path)
+          allowedPrefixes)
+      src;
 in
 rustPlatform.buildRustPackage rec {
   name = "mayastor";
-  cargoSha256 = "06zcprq4hvfpy8ikvxiqy4wy936h5ymnnkyzp6bkpqqq691xcrgf";
+  #cargoSha256 = "0000000000000000000000000000000000000000000000000000";
+  cargoSha256 = "1g2yq30p5z15qr94bl22bhh4p6idm5jfmh6kh88w3ixlacjyk8pf";
   version = sources.mayastor.branch;
-  src = sources.mayastor;
+  src = if release then sources.mayastor else
+  whitelistSource ../../../. [
+    "Cargo.lock"
+    "Cargo.toml"
+    "cli"
+    "csi"
+    "devinfo"
+    "jsonrpc"
+    "mayastor"
+    "nvmeadm"
+    "rpc"
+    "spdk-sys"
+    "sysfs"
+  ];
 
   LIBCLANG_PATH = "${llvmPackages.libclang}/lib";
 
@@ -36,14 +60,14 @@ rustPlatform.buildRustPackage rec {
   C_INCLUDE_PATH = "${libspdk}/include/spdk";
 
   nativeBuildInputs = [
-    clang
-    llvmPackages.libclang
     pkg-config
-    protobuf
-    utillinux.dev
   ];
 
   buildInputs = [
+    clang
+    llvmPackages.libclang
+    protobuf
+    utillinux.dev
     libaio
     libiscsi.lib
     libspdk
