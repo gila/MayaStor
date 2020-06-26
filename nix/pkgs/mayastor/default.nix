@@ -35,8 +35,9 @@ let
 in
 rustPlatform.buildRustPackage rec {
   name = "mayastor";
-  #cargoSha256 = "0000000000000000000000000000000000000000000000000000";
   cargoSha256 = "1g2yq30p5z15qr94bl22bhh4p6idm5jfmh6kh88w3ixlacjyk8pf";
+  #cargoSha256 = "0000000000000000000000000000000000000000000000000000";
+  #cargoSha256 = "06zcprq4hvfpy8ikvxiqy4wy936h5ymnnkyzp6bkpqqq691xcrgf";
   version = sources.mayastor.branch;
   src = if release then sources.mayastor else
   whitelistSource ../../../. [
@@ -57,17 +58,15 @@ rustPlatform.buildRustPackage rec {
 
   PROTOC = "${protobuf}/bin/protoc";
   PROTOC_INCLUDE = "${protobuf}/include";
-  C_INCLUDE_PATH = "${libspdk}/include/spdk";
 
   nativeBuildInputs = [
+    clang
     pkg-config
   ];
 
   buildInputs = [
-    clang
     llvmPackages.libclang
     protobuf
-    utillinux.dev
     libaio
     libiscsi.lib
     libspdk
