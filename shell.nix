@@ -18,6 +18,8 @@ mkShell {
   # fortify does not work with -O0 which is used by spdk when --enable-debug
   hardeningDisable = [ "fortify" ];
   buildInputs = [
+    #    nats-server
+    bash
     channel.stable.rust
     clang
     cowsay
@@ -30,7 +32,6 @@ mkShell {
     libiscsi.bin
     libudev
     llvmPackages.libclang
-    #    nats-server
     nodejs-12_x
     nvme-cli
     openssl
