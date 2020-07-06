@@ -320,7 +320,7 @@ pub fn mayastor_env_stop(rc: i32) {
 
 #[inline(always)]
 unsafe extern "C" fn signal_trampoline(_: *mut c_void) {
-    mayastor_env_stop(0);
+    mayastor_env_stop(1);
 }
 
 /// called on SIGINT and SIGTERM
