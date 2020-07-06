@@ -72,6 +72,7 @@ fn main() {
         .whitelist_function("*.uring.*")
         .whitelist_function("^iscsi.*")
         .whitelist_function("*.lock_lba_range")
+        .whitelist_function("^bdev.*")
         .blacklist_type("^longfunc")
         .whitelist_var("^NVMF.*")
         .whitelist_var("^SPDK.*")
