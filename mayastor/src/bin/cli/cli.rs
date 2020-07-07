@@ -6,7 +6,6 @@
 #![warn(unused_extern_crates)]
 #[macro_use]
 extern crate clap;
-
 use byte_unit::Byte;
 use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use std::cmp::max;
@@ -604,7 +603,7 @@ async fn replica_stat(
  *
  */
 
-#[tokio::main]
+#[tokio::main(max_threads = 1)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pools_subcommand = {
         let create = SubCommand::with_name("create")
@@ -645,6 +644,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .help("Storage pool name"),
             );
         SubCommand::with_name("pool")
+            .settings(&[AppSettings::SubcommandRequiredElseHelp])
             .about("Storage pool management")
             .subcommand(create)
             .subcommand(destroy)

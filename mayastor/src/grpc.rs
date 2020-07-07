@@ -22,6 +22,7 @@ use crate::{
     rebuild::RebuildJob,
     replica,
 };
+use std::net::SocketAddr;
 
 #[derive(Debug)]
 struct UnixStream(tokio::net::UnixStream);
@@ -473,11 +474,13 @@ impl Mayastor for MayastorGrpc {
     }
 }
 
-pub async fn grpc_server_run(endpoint: &str) -> std::result::Result<(), ()> {
+pub async fn grpc_server_run(
+    endpoint: SocketAddr,
+) -> std::result::Result<(), ()> {
     info!("gRPC server configured at address {}", endpoint);
     let svc = Server::builder()
         .add_service(MayastorServer::new(MayastorGrpc {}))
-        .serve(endpoint.parse().unwrap());
+        .serve(endpoint);
 
     match svc.await {
         Ok(_) => Ok(()),

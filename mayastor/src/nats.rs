@@ -107,7 +107,7 @@ struct MessageBus {
     /// Name of the node that mayastor is running on
     node: String,
     /// gRPC endpoint of the server provided by mayastor
-    grpc_endpoint: String,
+    grpc_endpoint: SocketAddr,
     /// NATS client
     client: Option<NatsClient>,
     /// heartbeat interval (how often the register message is sent)
@@ -116,11 +116,11 @@ struct MessageBus {
 
 impl MessageBus {
     /// Create message bus object with given parameters.
-    pub fn new(server: &str, node: &str, grpc_endpoint: &str) -> Self {
+    pub fn new(server: &str, node: &str, grpc_endpoint: SocketAddr) -> Self {
         Self {
             server: server.to_owned(),
             node: node.to_owned(),
-            grpc_endpoint: grpc_endpoint.to_owned(),
+            grpc_endpoint,
             client: None,
             hb_interval: Duration::from_secs(
                 match env::var("MAYASTOR_HB_INTERVAL") {
@@ -213,7 +213,7 @@ impl MessageBus {
     async fn register(&mut self) -> Result<(), Error> {
         let payload = RegisterArgs {
             id: self.node.clone(),
-            grpc_endpoint: self.grpc_endpoint.clone(),
+            grpc_endpoint: self.grpc_endpoint.to_string(),
         };
         match &mut self.client {
             Some(client) => client
@@ -260,7 +260,7 @@ impl MessageBus {
 pub async fn message_bus_run(
     server: &str,
     node: &str,
-    grpc_endpoint: &str,
+    grpc_endpoint: SocketAddr,
 ) -> Result<(), ()> {
     let (sender, receiver) = mpsc::channel::<()>(1);
     {

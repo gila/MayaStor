@@ -21,8 +21,8 @@ name = "uring-support"
 path = "src/bin/uring-support.rs"
 
 [[bin]]
-name = "mayastor-client"
-path = "src/client.rs"
+name = "mscuttle-ctl"
+path = "src/bin/cli/cli.rs"
 
 [dev-dependencies]
 assert_matches = "1.2"

@@ -53,6 +53,7 @@ use crate::{
     subsys::Config,
     target::iscsi,
 };
+use std::net::{IpAddr, SocketAddr};
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -87,6 +88,15 @@ fn add_default_port(endpoint: Option<String>, port: u16) -> Option<String> {
     }
 }
 
+fn parse_socket(socket: &str) -> Result<SocketAddr, String> {
+    let socket = socket.parse::<SocketAddr>().unwrap();
+
+    if socket.port() == 0 {
+        return Err(format!("invalid port specified, use addr:port syntax"));
+    }
+    Ok(socket)
+}
+
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "Mayastor",
@@ -98,9 +108,9 @@ pub struct MayastorCliArgs {
     #[structopt(short = "c")]
     /// Path to the configuration file if any
     pub config: Option<String>,
-    #[structopt(short = "g")]
+    #[structopt(short = "g", default_value = "127.0.0.1:10124", parse(try_from_str = parse_socket))]
     /// IP address and port for gRPC server to listen on
-    pub grpc_endpoint: Option<String>,
+    pub grpc_endpoint: SocketAddr,
     #[structopt(short = "L")]
     /// Enable logging for sub components
     pub log_components: Vec<String>,
@@ -142,18 +152,9 @@ pub struct MayastorCliArgs {
 impl Default for MayastorCliArgs {
     fn default() -> Self {
         Self {
-            grpc_endpoint: None,
-            nats_endpoint: None,
-            node_name: None,
-            env_context: None,
             reactor_mask: "0x1".into(),
-            mem_size: 0,
-            rpc_address: "/var/tmp/mayastor.sock".to_string(),
             no_pci: true,
-            log_components: vec![],
-            config: None,
-            mayastor_config: None,
-            hugedir: None,
+            ..Default::default()
         }
     }
 }
@@ -207,7 +208,7 @@ pub struct MayastorEnvironment {
     pub config: Option<String>,
     node_name: String,
     nats_endpoint: Option<String>,
-    grpc_endpoint: Option<String>,
+    grpc_endpoint: Option<SocketAddr>,
     mayastor_config: Option<String>,
     delay_subsystem_init: bool,
     enable_coredump: bool,
@@ -348,7 +349,7 @@ struct SubsystemCtx {
 impl MayastorEnvironment {
     pub fn new(args: MayastorCliArgs) -> Self {
         Self {
-            grpc_endpoint: add_default_port(args.grpc_endpoint, 10124),
+            grpc_endpoint: Some(args.grpc_endpoint),
             nats_endpoint: add_default_port(args.nats_endpoint, 4222),
             node_name: args.node_name.unwrap_or_else(|| "mayastor-node".into()),
             config: args.config,
@@ -727,12 +728,12 @@ impl MayastorEnvironment {
     }
 
     /// start mayastor and call f when all is setup.
-    pub fn start<F>(self, f: F) -> Result<i32>
+    pub fn start<F>(mut self, f: F) -> Result<i32>
     where
         F: FnOnce() + 'static,
     {
         type FutureResult = Result<(), ()>;
-        let grpc_endpoint = self.grpc_endpoint.clone();
+        let grpc_endpoint = self.grpc_endpoint.take().unwrap();
         let nats_endpoint = self.nats_endpoint.clone();
         let node_name = self.node_name.clone();
         self.init();
@@ -743,23 +744,27 @@ impl MayastorEnvironment {
             .build()
             .unwrap();
 
+        let mut futures: Vec<
+            Pin<Box<dyn future::Future<Output = FutureResult>>>,
+        > = Vec::new();
+
         let local = task::LocalSet::new();
         rt.block_on(async {
             local
                 .run_until(async {
                     let master = Reactors::current();
                     master.send_future(async { f() });
-                    let mut futures: Vec<
-                        Pin<Box<dyn future::Future<Output = FutureResult>>>,
-                    > = Vec::new();
-                    if let Some(grpc_ep) = grpc_endpoint.as_ref() {
-                        futures.push(Box::pin(grpc::grpc_server_run(grpc_ep)));
-                        if let Some(nats_ep) = nats_endpoint.as_ref() {
-                            futures.push(Box::pin(nats::message_bus_run(
-                                nats_ep, &node_name, grpc_ep,
-                            )));
-                        }
-                    };
+                    futures
+                        .push(Box::pin(grpc::grpc_server_run(grpc_endpoint)));
+
+                    if let Some(nats_ep) = nats_endpoint.as_ref() {
+                        futures.push(Box::pin(nats::message_bus_run(
+                            nats_ep,
+                            &node_name,
+                            grpc_endpoint,
+                        )));
+                    }
+
                     futures.push(Box::pin(master));
                     let _out = future::try_join_all(futures).await;
                     info!("reactors stopped");
