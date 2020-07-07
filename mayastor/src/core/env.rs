@@ -53,7 +53,7 @@ use crate::{
     subsys::Config,
     target::iscsi,
 };
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -92,7 +92,7 @@ fn parse_socket(socket: &str) -> Result<SocketAddr, String> {
     let socket = socket.parse::<SocketAddr>().unwrap();
 
     if socket.port() == 0 {
-        return Err(format!("invalid port specified, use addr:port syntax"));
+        return Err("invalid port specified, use addr:port syntax".to_string());
     }
     Ok(socket)
 }
