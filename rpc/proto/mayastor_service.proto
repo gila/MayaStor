@@ -76,7 +76,13 @@ message CreateReply {
 	string name = 1;
 }
 
+message BdevShareRequest {
+	string name = 1;
+	string proto = 2 ;
+}
+
 service BdevRpc {
 	rpc List(mayastor.Null) returns (Bdevs) {}
 	rpc Create(BdevUri) returns (CreateReply) {}
+	rpc Share(mayastor.PublishNexusRequest) returns (BdevUri) {}
 }

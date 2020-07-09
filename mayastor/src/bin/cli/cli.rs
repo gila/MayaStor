@@ -83,7 +83,6 @@ async fn main() -> Result<(), Status> {
         ("nexus", Some(args)) => nexus_cli::handler(ctx, args).await?,
         ("pool", Some(args)) => pool_cli::handler(ctx, args).await?,
         ("replica", Some(args)) => replica_cli::handler(ctx, args).await?,
-
         _ => eprintln!("Internal Error: Not implemented"),
     };
     Ok(())

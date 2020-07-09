@@ -4,8 +4,12 @@ use crate::{
     nexus_uri::{bdev_create, NexusBdevError},
 };
 
+use crate::{
+    bdev::Uri,
+    target::{iscsi, Side},
+};
 use rpc::{
-    mayastor::Null,
+    mayastor::{Null, PublishNexusRequest},
     service::{bdev_rpc_server::BdevRpc, BdevUri, Bdevs, CreateReply},
 };
 use tonic::{Request, Response, Status};
@@ -61,12 +65,29 @@ impl BdevRpc for BdevSvc {
     async fn create(
         &self,
         request: Request<BdevUri>,
-    ) -> Result<Response<CreateReply>, Status> {
+    ) -> GrpcResult<CreateReply> {
         let uri = request.into_inner().uri;
         let bdev = locally! { async move { bdev_create(&uri).await } };
 
         Ok(Response::new(CreateReply {
             name: bdev,
         }))
+    }
+
+    #[instrument(level = "debug", err)]
+    async fn share(
+        &self,
+        request: Request<PublishNexusRequest>,
+    ) -> GrpcResult<BdevUri> {
+        let parsed = Uri::parse(&request.into_inner().uuid)?.get_name();
+        match Bdev::lookup_by_name(&parsed) {
+            Some(bdev) => iscsi::share(&bdev.uuid_as_string(), &bdev, Side::Nexus)
+                .map_err(|_e| Status::internal("stuk")).map(|_share|{
+               Response::new(BdevUri {
+                    uri: "congrats, its shared somewhere, see the logs, use kubectl or something!".into()
+                })
+            }),
+            None => Err(Status::not_found(parsed))
+        }
     }
 }
