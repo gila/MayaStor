@@ -1,4 +1,5 @@
 use mayastor::{
+    bdev::Uri,
     core::{
         mayastor_env_stop,
         Bdev,

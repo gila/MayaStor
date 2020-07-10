@@ -33,6 +33,10 @@ use nix::errno::Errno;
 use snafu::ResultExt;
 use spdk_sys::delete_malloc_disk;
 
+/// malloc:///malloc0?blk_size=512&num_blocks=100000
+/// ^^^^^^^^ scheme
+/// ^^^^^^^^^^^^^^^^^ path
+/// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ query parameters
 impl TryFrom<&Url> for Malloc {
     type Error = NexusBdevError;
 
@@ -47,7 +51,6 @@ impl TryFrom<&Url> for Malloc {
 
         let mut parameters: HashMap<String, String> =
             uri.query_pairs().into_owned().collect();
-
         let blk_size: u32 = if let Some(value) = parameters.remove("blk_size") {
             value.parse().context(nexus_uri::IntParamParseError {
                 uri: uri.to_string(),
@@ -169,3 +172,6 @@ impl CreateDestroy for Malloc {
         }
     }
 }
+
+
+

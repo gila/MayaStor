@@ -31,6 +31,7 @@ use crate::{
 };
 
 use super::opts::GetOpts;
+use crate::bdev::Uri;
 
 pub static CONFIG: OnceCell<Config> = OnceCell::new();
 
@@ -75,6 +76,7 @@ impl Config {
     {
         CONFIG.get_or_init(f)
     }
+
 
     /// mostly similar as above, but we do not need to pass a closure
     pub fn get() -> &'static Self {
@@ -243,29 +245,33 @@ impl Config {
     }
 
     /// create base bdevs and export these over nvmf if configured
+    /// TODO: the UUID should be encoded within the URI itself
     async fn create_base_bdevs(&self) -> usize {
         let mut failures: usize = 0;
         if let Some(bdevs) = self.base_bdevs.as_ref() {
-            for bdev in bdevs {
-                info!("creating bdev {}", bdev.uri);
-                if bdev_create(&bdev.uri).await.is_err() {
+            for entry in bdevs {
+                let bdev = Uri::parse(&entry.uri).unwrap();
+                info!("creating bdev {}", entry.uri);
+
+                if bdev.create().await.is_err() {
                     warn!(
                         "failed to create bdev {} during config load",
-                        bdev.uri
+                        bdev.get_name()
                     );
                     failures += 1;
                     continue;
                 }
 
-                let mut my_bdev = Bdev::lookup_by_name(&bdev.uri).unwrap();
+                let mut my_bdev =
+                    Bdev::lookup_by_name(&bdev.get_name()).unwrap();
 
                 // if we were given some UUID set it now
-                if let Some(uuid) = bdev.uuid.as_ref() {
+                if let Some(uuid) = entry.uuid.as_ref() {
                     my_bdev.set_uuid(Some(uuid.clone()));
                 }
 
                 let uuid = my_bdev.uuid_as_string();
-                assert_eq!(bdev.uuid.as_ref(), Some(&uuid));
+                assert_eq!(entry.uuid.as_ref(), Some(&uuid));
 
                 if !self.implicit_share_base {
                     continue;

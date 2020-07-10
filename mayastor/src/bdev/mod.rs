@@ -32,6 +32,11 @@ pub trait CreateDestroy {
     async fn destroy(self: Box<Self>) -> Result<(), Self::Error>;
 }
 
+pub trait IntoUri {
+    type Error;
+    fn into_uri(&self) -> Result<String, Self::Error>;
+}
+
 /// The following trait must also be implemented for every supported
 /// device type.
 pub trait GetName {

@@ -90,9 +90,11 @@ impl Bdev {
         }
     }
 
+
     pub fn is_claimed(&self) -> bool {
         !unsafe { self.0.as_ref().internal.claim_module.is_null() }
     }
+
 
     pub fn claimed_by(&self) -> Option<String> {
         let ptr = unsafe { self.0.as_ref().internal.claim_module };
@@ -196,7 +198,7 @@ impl Bdev {
     }
 
     /// Set an alias on the bdev, this alias can be used to find the bdev later
-    pub fn add_alias(&self, alias: &str) -> bool {
+    fn add_alias(&self, alias: &str) -> bool {
         let alias = std::ffi::CString::new(alias).unwrap();
         let ret = unsafe {
             spdk_sys::spdk_bdev_alias_add(self.0.as_ptr(), alias.as_ptr())
@@ -206,7 +208,7 @@ impl Bdev {
     }
 
     /// Get list of bdev aliases
-    pub fn aliases(&self) -> Vec<String> {
+    fn aliases(&self) -> Vec<String> {
         let mut aliases = Vec::new();
         let head = unsafe { &*spdk_bdev_get_aliases(self.0.as_ptr()) };
         let mut ent_ptr = head.tqh_first;
