@@ -25,7 +25,7 @@ let
     tag = version;
     created = "now";
     config = {
-      Env = [ "PATH=${env}" ];
+      Env = [ "GIT_VERSION" = ${version}" "PATH=${env}" ];
       ExposedPorts = { "10124/tcp" = { }; };
       Entrypoint = [ "/bin/mayastor" ];
     };

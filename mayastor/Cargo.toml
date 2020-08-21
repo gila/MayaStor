@@ -3,7 +3,6 @@ authors = ["Jeffry Molanus <jeffry.molanus@gmail.com>"]
 edition = "2018"
 name = "mayastor"
 version = "0.1.0"
-
 [[bin]]
 name = "mayastor"
 path = "src/bin/main.rs"
@@ -42,10 +41,9 @@ crossbeam-sync = "0.0.0"
 env_logger = "0.7"
 futures = "0.3"
 futures-timer = "2.0"
-git-version = "0.3"
+git-version = "*"
 io-uring = "0.3.4"
 ioctl-gen = "0.1.1"
-jsonrpc = { path = "../jsonrpc"}
 libc = "0.2"
 log = "0.4"
 nix = "0.16"
@@ -66,6 +64,9 @@ tower = "0.3"
 tracing = "0.1"
 tracing-futures = "0.2.4"
 url = "2.1"
+
+[dependencies.jsonrpc]
+path = "../jsonrpc"
 
 [dependencies.rpc]
 path = "../rpc"
