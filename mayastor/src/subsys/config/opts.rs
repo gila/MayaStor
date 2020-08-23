@@ -149,6 +149,7 @@ pub struct TcpTransportOpts {
     dif_insert_or_strip: bool,
     /// no idea
     sock_priority: u32,
+    association_timeout: u32,
 }
 
 impl Default for TcpTransportOpts {
@@ -168,6 +169,7 @@ impl Default for TcpTransportOpts {
             max_srq_depth: 0, // RDMA
             no_srq: false,    // RDMA
             sock_priority: 0,
+            association_timeout: 0,
         }
     }
 }
@@ -193,6 +195,7 @@ impl From<TcpTransportOpts> for spdk_nvmf_transport_opts {
             sock_priority: o.sock_priority,
             acceptor_backlog: 0,
             abort_timeout_sec: 0,
+            association_timeout: o.association_timeout
         }
     }
 }
@@ -392,6 +395,8 @@ pub struct IscsiTgtOpts {
     error_recovery_level: u32,
     /// todo
     allow_duplicate_isid: bool,
+    MaxLargeDataInPerConnection: u32,
+    MaxR2TPerConnection: u32,
 }
 
 impl Default for IscsiTgtOpts {
@@ -415,6 +420,8 @@ impl Default for IscsiTgtOpts {
             immediate_data: true,
             error_recovery_level: 0,
             allow_duplicate_isid: false,
+            MaxLargeDataInPerConnection: 64,
+            MaxR2TPerConnection: 64,
         }
     }
 }
@@ -444,6 +451,8 @@ impl From<&IscsiTgtOpts> for spdk_iscsi_opts {
             ImmediateData: o.immediate_data,
             ErrorRecoveryLevel: o.error_recovery_level,
             AllowDuplicateIsid: o.allow_duplicate_isid,
+            MaxR2TPerConnection: o.MaxR2TPerConnection,
+            MaxLargeDataInPerConnection: o.MaxLargeDataInPerConnection,
         }
     }
 }
