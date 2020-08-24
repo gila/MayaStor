@@ -11,6 +11,8 @@ use ::rpc::mayastor::{
 };
 
 use crate::context::Context;
+use k8s_openapi::api::core::v1::{Node, NodeStatus};
+use kube::{api::ListParams, Api};
 
 mod bdev_cli;
 mod context;
@@ -25,6 +27,19 @@ type BdevClient = BdevRpcClient<Channel>;
 pub(crate) fn parse_size(src: &str) -> Result<Byte, String> {
     Byte::from_str(src).map_err(|_| src.to_string())
 }
+
+struct Ep {
+    name: String,
+    ip: std::net::IpAddr,
+}
+
+// impl From<NodeStatus> for Ep {
+//     fn from(n: NodeStatus) -> Self {
+//         Self {
+//             ..Default::default()
+//         }
+//     }
+// }
 
 #[tokio::main(max_threads = 2)]
 async fn main() -> Result<(), Status> {
@@ -75,19 +90,33 @@ async fn main() -> Result<(), Status> {
         .subcommand(nexus_cli::subcommands())
         .subcommand(replica_cli::subcommands())
         .subcommand(bdev_cli::subcommands())
-        .subcommand(rebuild_cli::subcommands())
-        .get_matches();
+        .subcommand(rebuild_cli::subcommands());
+    //        .get_matches();
 
-    let ctx = Context::new(&matches).await;
+    // let ctx = Context::new(&matches).await;
 
-    match matches.subcommand() {
-        ("bdev", Some(args)) => bdev_cli::handler(ctx, args).await?,
-        ("nexus", Some(args)) => nexus_cli::handler(ctx, args).await?,
-        ("pool", Some(args)) => pool_cli::handler(ctx, args).await?,
-        ("replica", Some(args)) => replica_cli::handler(ctx, args).await?,
-        ("rebuild", Some(args)) => rebuild_cli::handler(ctx, args).await?,
+    let k8s = kube::Client::try_default().await.unwrap();
+    let nodes: Api<Node> = Api::all(k8s.clone());
 
-        _ => eprintln!("Internal Error: Not implemented"),
-    };
+    let lp = ListParams::default().labels("openebs.io/engine=mayastor");
+    let mut nodes = nodes.list(&lp).await.unwrap();
+
+    nodes.items.iter_mut().for_each(|n| {
+        n.status.map(|n| {
+            if let Some(address) = n.addresses.unwrap().first() {
+                dbg!(address);
+            }
+        });
+    });
+
+    // match matches.subcommand() {
+    //     ("bdev", Some(args)) => bdev_cli::handler(ctx, args).await?,
+    //     ("nexus", Some(args)) => nexus_cli::handler(ctx, args).await?,
+    //     ("pool", Some(args)) => pool_cli::handler(ctx, args).await?,
+    //     ("replica", Some(args)) => replica_cli::handler(ctx, args).await?,
+    //     ("rebuild", Some(args)) => rebuild_cli::handler(ctx, args).await?,
+    //
+    //     _ => eprintln!("Internal Error: Not implemented"),
+    // };
     Ok(())
 }

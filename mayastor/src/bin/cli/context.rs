@@ -1,11 +1,12 @@
 use crate::{BdevClient, MayaClient};
 use byte_unit::Byte;
 use clap::ArgMatches;
+use kube::Client;
 use std::cmp::max;
-
 pub struct Context {
     pub(crate) client: MayaClient,
     pub(crate) bdev: BdevClient,
+    pub(crate) k8s: Option<kube::Client>,
     verbosity: u64,
     units: char,
 }
@@ -32,11 +33,18 @@ impl Context {
         }
 
         let client = MayaClient::connect(uri.clone()).await.unwrap();
+        let k8s = Client::try_default().await;
+
         Context {
             client,
             bdev: BdevClient::connect(uri).await.unwrap(),
-            verbosity,
+            k8s: if k8s.is_ok() {
+                Some(k8s.unwrap())
+            } else {
+                None
+            },
             units,
+            verbosity,
         }
     }
     pub(crate) fn v1(&self, s: &str) {
