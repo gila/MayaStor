@@ -11,7 +11,6 @@ use crate::{
     core::{Cores, Reactor},
     subsys::Config,
 };
-
 fn print_error_chain(err: &dyn std::error::Error) -> String {
     let mut msg = format!("{}", err);
     let mut opt_source = err.source();
@@ -31,7 +30,7 @@ fn print_error_chain(err: &dyn std::error::Error) -> String {
 #[macro_export]
 macro_rules! locally {
     ($body:expr) => {{
-        let hdl = crate::core::Reactors::current().spawn_local($body);
+        let hdl = crate::core::Reactors::master().spawn_local($body);
         match hdl.await.unwrap() {
             Ok(res) => res,
             Err(err) => {
@@ -59,7 +58,7 @@ where
     A: 'static + From<I>,
     L: Into<Status> + Error + 'static,
 {
-    assert_eq!(Cores::current(), Cores::first());
+    //assert_eq!(Cores::current(), Cores::first());
     Reactor::block_on(future)
         .unwrap()
         .map(|r| Response::new(A::from(r)))

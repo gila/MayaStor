@@ -48,7 +48,6 @@ use futures::{
 use log::info;
 use once_cell::sync::OnceCell;
 use serde::export::Formatter;
-
 use spdk_sys::{
     spdk_cpuset_get_cpu,
     spdk_env_thread_launch_pinned,
@@ -59,6 +58,7 @@ use spdk_sys::{
 };
 
 use crate::core::{Cores, Mthread};
+use async_executor::LocalExecutor;
 use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,6 +112,7 @@ pub struct Reactor {
     /// through FFI
     sx: Sender<Pin<Box<dyn Future<Output = ()> + 'static>>>,
     rx: Receiver<Pin<Box<dyn Future<Output = ()> + 'static>>>,
+    executor: LocalExecutor,
 }
 
 thread_local! {
@@ -272,6 +273,7 @@ impl Reactor {
             flags: Cell::new(ReactorState::Init),
             sx,
             rx,
+            executor: Default::default(),
         }
     }
 
@@ -479,6 +481,8 @@ impl Reactor {
         while let Ok(i) = self.incoming.pop() {
             self.threads.borrow_mut().push_back(i);
         }
+
+        self.executor
     }
 }
 

@@ -3,7 +3,6 @@ authors = ["Jeffry Molanus <jeffry.molanus@gmail.com>"]
 edition = "2018"
 name = "mayastor"
 version = "0.1.0"
-
 [[bin]]
 name = "mayastor"
 path = "src/bin/main.rs"
@@ -29,6 +28,9 @@ name = "jsonrpc"
 path = "src/bin/jsonrpc.rs"
 
 [dependencies]
+async-executor = "*"
+async-native-tls = "*"
+hyper = "*"
 async-task = "3.0"
 async-trait = "0.1.36"
 bincode = "1.2"
@@ -45,7 +47,6 @@ futures-timer = "2.0"
 git-version = "0.3"
 io-uring = "0.3.4"
 ioctl-gen = "0.1.1"
-jsonrpc = { path = "../jsonrpc"}
 libc = "0.2"
 log = "0.4"
 nix = "0.16"
@@ -66,6 +67,10 @@ tower = "0.3"
 tracing = "0.1"
 tracing-futures = "0.2.4"
 url = "2.1"
+tokio = "0.2.22"
+
+[dependencies.jsonrpc]
+path = "../jsonrpc"
 
 [dependencies.rpc]
 path = "../rpc"
@@ -74,15 +79,15 @@ path = "../rpc"
 features = ["derive"]
 version = "1.0"
 
+[dependencies.smol]
+features = ["tokio02"]
+version = "0.3"
+
 [dependencies.spdk-sys]
 path = "../spdk-sys"
 
 [dependencies.sysfs]
 path = "../sysfs"
-
-[dependencies.tokio]
-features = ["full"]
-version = "0.2"
 
 [dependencies.uuid]
 features = ["v4"]

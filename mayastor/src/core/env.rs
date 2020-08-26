@@ -17,7 +17,6 @@ use futures::{channel::oneshot, future};
 use once_cell::sync::Lazy;
 use snafu::Snafu;
 use structopt::StructOpt;
-use tokio::{runtime::Builder, task};
 
 use spdk_sys::{
     maya_log,
@@ -47,10 +46,11 @@ use crate::{
     },
     grpc,
     logger,
-    nats,
     subsys::Config,
     target::iscsi,
 };
+use smol::Task;
+use tokio::{runtime::Builder, task};
 
 fn parse_mb(src: &str) -> Result<i32, String> {
     // For compatibility, we check to see if there are no alphabetic characters
@@ -286,7 +286,7 @@ async fn do_shutdown(arg: *mut c_void) {
         warn!("Mayastor stopped non-zero: {}", rc);
     }
 
-    nats::message_bus_stop();
+    //nats::message_bus_stop();
     iscsi::fini();
 
     unsafe {
@@ -738,6 +738,7 @@ impl MayastorEnvironment {
                 .run_until(async {
                     let master = Reactors::current();
                     master.send_future(async { f() });
+
                     let mut futures: Vec<
                         Pin<Box<dyn future::Future<Output = FutureResult>>>,
                     > = Vec::new();
