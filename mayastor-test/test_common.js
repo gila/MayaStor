@@ -189,7 +189,7 @@ function startSpdk (config, args, env) {
 
 // Start mayastor process and return immediately.
 function startMayastor (config, args, env, yaml) {
-  args = args || ['-r', SOCK, '-g', grpcEndpoint];
+  args = args || ['-r', SOCK, '-g', grpcEndpoint, '-L', 'nvme', '-L', 'nvmf'];
   env = env || {};
 
   if (yaml) {

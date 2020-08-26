@@ -77,6 +77,7 @@ fn main() {
         .whitelist_function("^bdev.*")
         .whitelist_function("^nbd_.*")
         .whitelist_function("^vbdev_.*")
+        .whitelist_function("^_bdev_.*")
         .blacklist_type("^longfunc")
         .whitelist_var("^NVMF.*")
         .whitelist_var("^SPDK.*")

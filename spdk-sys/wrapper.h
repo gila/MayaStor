@@ -36,3 +36,17 @@
 
 #include "logwrapper.h"
 
+struct spdk_bdev_io *
+_bdev_channel_get_io(struct spdk_bdev_channel *channel) {
+	bdev_channel_get_io(channel);
+}
+
+void
+_bdev_io_init(struct spdk_bdev_io *io, struct spdk_bdev* bdev, void *cb_arg, spdk_bdev_io_completion_cb cb) {
+	bdev_io_init(io, bdev, cb_arg, cb);
+}
+
+void
+_bdev_io_submit(struct spdk_bdev_io *io) {
+	bdev_io_submit(io);
+}

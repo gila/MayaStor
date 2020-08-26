@@ -9,3 +9,9 @@ maya_log(int level, const char *file, const int line, const char *func,
     logfn(level, file, line, func, &buf[0], n_written);
 }
 
+void *
+bdev_io_channel_get_ctx(struct spdk_io_channel *ch)
+{
+	return (uint8_t *)ch + sizeof(*ch);
+}
+
