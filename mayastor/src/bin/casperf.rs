@@ -12,9 +12,13 @@ use mayastor::{
 };
 use std::convert::TryFrom;
 mayastor::CPS_INIT!();
-use mayastor::core::{Descriptor, DmaBuf};
+use mayastor::core::{Descriptor, DmaBuf, Reactor};
 use spdk_sys::*;
-use std::{os::raw::c_void, ptr::NonNull};
+use std::{
+    os::raw::c_void,
+    ptr::{slice_from_raw_parts_mut, NonNull},
+};
+
 extern "C" {
     pub fn bdev_io_init(
         io: *mut spdk_bdev_io,
@@ -39,16 +43,120 @@ extern "C" fn cas_completion(
 ) {
     if success {
         println!("wholly shit batman! it worked!");
-        unsafe {
-            return spdk_bdev_io_complete(io, SPDK_BDEV_IO_STATUS_SUCCESS);
-        }
     }
 
     unsafe {
-        spdk_bdev_io_complete(io, SPDK_BDEV_IO_STATUS_FAILED);
+        spdk_bdev_free_io(io);
     }
+
+    mayastor_env_stop(0);
 }
 
+async fn start4() {
+    unsafe {
+        signal_hook::register(signal_hook::SIGINT, || {
+            println!("impatient huh?!");
+            std::process::exit(1);
+        })
+        .unwrap();
+
+        let b = bdev_create("malloc:///malloc0?size_mb=10")
+            .await
+            .map(|name| Bdev::lookup_by_name(&name).unwrap())
+            .unwrap();
+        let desc = b.open(false).unwrap();
+        let channel = desc.get_channel().unwrap();
+        let buf = DmaBuf::new(512, 9).unwrap();
+
+        let mut bio = NonNull::new(bdev_get_bio(
+            channel.as_ptr(),
+            desc.as_ptr(),
+            std::ptr::null_mut(),
+        ))
+        .unwrap();
+
+        bio.as_mut().u.bdev.iovs = &mut bio.as_mut().iov;
+        bio.as_mut().u.bdev.iovcnt = 1;
+        bio.as_mut().u.bdev.num_blocks = 1;
+        bio.as_mut().type_ = SPDK_BDEV_IO_TYPE_READ as u8;
+
+        let mut iov =
+            std::slice::from_raw_parts_mut(bio.as_mut().u.bdev.iovs, 1);
+        iov[0].iov_base = *buf;
+        iov[0].iov_len = 512;
+        //NOTE: internal.ch set in get_bio()
+        bio.as_mut().internal.desc = desc.as_ptr();
+
+        bdev_io_init(
+            bio.as_ptr(),
+            b.as_ptr(),
+            std::ptr::null_mut(),
+            Some(cas_completion),
+        );
+        std::mem::forget(desc);
+        std::mem::forget(channel);
+        std::mem::forget(buf);
+        bdev_io_submit(bio.as_ptr());
+    }
+}
+async fn start3() {
+    unsafe {
+        signal_hook::register(signal_hook::SIGINT, || {
+            println!("impatient huh?!");
+            std::process::exit(1);
+        })
+        .unwrap();
+
+        let b = bdev_create("malloc:///malloc0?size_mb=10")
+            .await
+            .map(|name| Bdev::lookup_by_name(&name).unwrap())
+            .unwrap();
+        let desc = b.open(false).unwrap();
+        let channel = desc.get_channel().unwrap();
+        let buf = DmaBuf::new(512, 9).unwrap();
+
+        let bio =
+            bdev_get_bio(channel.as_ptr(), desc.as_ptr(), std::ptr::null_mut());
+
+        (*bio).u.bdev.iovs = &mut (*bio).iov;
+        (*bio).u.bdev.iovcnt = 1;
+        (*bio).u.bdev.num_blocks = 1;
+        (*bio).type_ = SPDK_BDEV_IO_TYPE_READ as u8;
+
+        let mut iov = std::slice::from_raw_parts_mut((*bio).u.bdev.iovs, 1);
+        iov[0].iov_base = *buf;
+        iov[0].iov_len = 512;
+        //NOTE: internal.ch set in get_bio()
+        (*bio).internal.desc = desc.as_ptr();
+
+        bdev_io_init(
+            bio,
+            b.as_ptr(),
+            std::ptr::null_mut(),
+            Some(cas_completion),
+        );
+        std::mem::forget(desc);
+        std::mem::forget(channel);
+        std::mem::forget(buf);
+        bdev_io_submit(bio);
+
+        //
+        // let desc = b.open(true).unwrap();
+        //
+        // let buf = DmaBuf::new(512, b.alignment()).unwrap();
+        // let channel = desc.get_channel().unwrap();
+        //
+        // spdk_bdev_read(
+        //     desc.as_ptr(),
+        //     channel.as_ptr(),
+        //     *buf,
+        //     0,
+        //     buf.len() as u64,
+        //     Some(cas_completion),
+        //     std::ptr::null_mut(),
+        // );
+    }
+}
 async fn start2() {
     unsafe {
         signal_hook::register(signal_hook::SIGINT, || {
@@ -61,41 +169,43 @@ async fn start2() {
             .await
             .map(|name| Bdev::lookup_by_name(&name).unwrap())
             .unwrap();
-
         let desc = b.open(false).unwrap();
-
-        let buf = DmaBuf::new(512, 9).unwrap();
         let channel = desc.get_channel().unwrap();
-        dbg!(&channel);
-        let bdev_channel: *mut c_void = (channel.as_ptr() as *mut u8)
-            .add(::std::mem::size_of::<spdk_io_channel>() as usize)
-            as *mut _;
+        let buf = DmaBuf::new(512, 9).unwrap();
+        let bio = bdev_get_bio(channel.as_ptr(), desc.as_ptr(), *buf);
 
-        let spdk_bdev_channel = bdev_io_channel_get_ctx(channel.as_ptr());
+        let mut iov = std::slice::from_raw_parts_mut((*bio).u.bdev.iovs, 1);
+        iov[0].iov_len = 512;
+        (*bio).u.bdev.num_blocks = 1;
+        (*bio).type_ = SPDK_BDEV_IO_TYPE_READ as u8;
 
-        std::mem::forget(channel);
-        let mut io = bdev_channel_get_io(spdk_bdev_channel as *mut _);
-        (*io).u.bdev.iovs = &mut (*io).iov;
-        // *(*io).u.bdev.iovs[0].iov_base = *buf;
-        // *(*io).u.bdev.iovs[0].iov_len = b.block_len() as u64;
-        (*io).u.bdev.iovcnt = 1;
-        (*io).u.bdev.md_buf = std::ptr::null_mut();
-        (*io).u.bdev.num_blocks = 1;
-        (*io).u.bdev.offset_blocks = 0;
-        (*io).internal.ch = spdk_bdev_channel as *mut _;
-        (*io).internal.desc = desc.as_ptr();
-        (*io).type_ = SPDK_BDEV_IO_TYPE_READ as u8;
-
-        std::mem::forget(buf);
-        std::mem::forget(desc);
         bdev_io_init(
-            io,
+            bio,
             b.as_ptr(),
             std::ptr::null_mut(),
             Some(cas_completion),
         );
+        bdev_io_submit(bio);
 
-        bdev_io_submit(io);
+        //
+        // let desc = b.open(true).unwrap();
+        //
+        // let buf = DmaBuf::new(512, b.alignment()).unwrap();
+        // let channel = desc.get_channel().unwrap();
+        //
+        // spdk_bdev_read(
+        //     desc.as_ptr(),
+        //     channel.as_ptr(),
+        //     *buf,
+        //     0,
+        //     buf.len() as u64,
+        //     Some(cas_completion),
+        //     std::ptr::null_mut(),
+        // );
+
+        // std::mem::forget(desc);
+        // std::mem::forget(channel);
+        // std::mem::forget(buf);
     }
 }
 
@@ -108,7 +218,7 @@ async fn start() {
     }
     .unwrap();
 
-    let b = bdev_create("malloc:///malloc0?size_mb=10")
+    let b = bdev_create("malloc:///malloc0?size_mb=1")
         .await
         .map(|name| Bdev::lookup_by_name(&name).unwrap())
         .unwrap();
@@ -139,6 +249,11 @@ fn main() {
     args.grpc_endpoint = Some("0.0.0.0".to_string());
 
     let ms = MayastorEnvironment::new(args);
-    ms.start(|| Reactors::master().send_future(start2()))
+    ms.start(|| {
+        Reactor::block_on(async {
+            start4().await;
+        })
         .unwrap();
+    })
+    .unwrap();
 }

@@ -29,6 +29,8 @@ impl ParseCallbacks for MacroCallback {
 fn build_wrapper() {
     cc::Build::new()
         .include("spdk/include")
+        .include("spdk/include/spdk_internal")
+        .include("spdk/lib")
         .file("logwrapper.c")
         .compile("logwrapper");
 }
