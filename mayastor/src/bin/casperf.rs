@@ -12,11 +12,15 @@ use mayastor::{
 };
 use std::convert::TryFrom;
 mayastor::CPS_INIT!();
-use mayastor::core::{Descriptor, DmaBuf, Reactor};
+use mayastor::core::{DmaBuf, Reactor};
+use pin_utils::core_reexport::future::Future;
 use spdk_sys::*;
 use std::{
+    cell::{RefCell, UnsafeCell},
     os::raw::c_void,
-    ptr::{slice_from_raw_parts_mut, NonNull},
+    pin::Pin,
+    ptr::NonNull,
+    task::{Context, Poll, Waker},
 };
 
 extern "C" {
@@ -45,11 +49,50 @@ extern "C" fn cas_completion(
         println!("wholly shit batman! it worked!");
     }
 
+    let waker = unsafe { *(arg as *const _ as *mut Option<Waker>) };
+    waker.as_mut().unwrap().wake();
+    //waker.as_ref().unwrap().wake();
+
     unsafe {
         spdk_bdev_free_io(io);
     }
 
-    mayastor_env_stop(0);
+    //mayastor_env_stop(0);
+}
+
+struct Bio(NonNull<spdk_bdev_io>);
+
+impl Bio {
+    fn submit(self) -> BioFuture {
+        unsafe { bdev_io_submit(self.0.as_ptr()) };
+        BioFuture {
+            inner: self,
+            done: 0,
+            waker: UnsafeCell::new(None),
+        }
+    }
+}
+
+struct BioFuture {
+    pub inner: Bio,
+    pub done: i32,
+    pub waker: std::cell::UnsafeCell<Option<Waker>>,
+}
+
+impl Future for BioFuture {
+    type Output = i32;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        //dbg!(&self.done);
+        match self.done {
+            1 => Poll::Ready(self.done),
+            _ => {
+                let mut v = self.waker.get();
+                *v = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
 }
 
 async fn start4() {
@@ -64,6 +107,7 @@ async fn start4() {
             .await
             .map(|name| Bdev::lookup_by_name(&name).unwrap())
             .unwrap();
+
         let desc = b.open(false).unwrap();
         let channel = desc.get_channel().unwrap();
         let buf = DmaBuf::new(512, 9).unwrap();
@@ -87,16 +131,29 @@ async fn start4() {
         //NOTE: internal.ch set in get_bio()
         bio.as_mut().internal.desc = desc.as_ptr();
 
+        let fut = BioFuture {
+            inner: Bio(NonNull::new(bio.as_ptr()).unwrap()),
+            done: 0,
+            waker: UnsafeCell::new(None),
+        };
+
+        pin_utils::pin_mut!(fut);
+
+        let ptr = &fut.waker as *const _ as *mut c_void;
+        dbg!(ptr);
         bdev_io_init(
             bio.as_ptr(),
             b.as_ptr(),
-            std::ptr::null_mut(),
+            ptr.cast(),
             Some(cas_completion),
         );
+
         std::mem::forget(desc);
         std::mem::forget(channel);
         std::mem::forget(buf);
+
         bdev_io_submit(bio.as_ptr());
+        fut.await;
     }
 }
 async fn start3() {
