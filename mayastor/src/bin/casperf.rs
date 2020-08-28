@@ -48,9 +48,11 @@ extern "C" fn cas_completion(
     if success {
         println!("wholly shit batman! it worked!");
     }
-
-    let waker = unsafe { *(arg as *const _ as *mut Option<Waker>) };
-    waker.as_mut().unwrap().wake();
+    dbg!(arg);
+    let waker = unsafe { &mut *(arg as *const _ as *mut BioFuture) };
+    dbg!(&waker);
+    waker.done = 1;
+    waker.waker.as_mut().unwrap().wake_by_ref();
     //waker.as_ref().unwrap().wake();
 
     unsafe {
@@ -59,7 +61,7 @@ extern "C" fn cas_completion(
 
     //mayastor_env_stop(0);
 }
-
+#[derive(Debug)]
 struct Bio(NonNull<spdk_bdev_io>);
 
 impl Bio {
@@ -68,27 +70,31 @@ impl Bio {
         BioFuture {
             inner: self,
             done: 0,
-            waker: UnsafeCell::new(None),
+            waker: None,
         }
     }
 }
 
+#[derive(Debug)]
 struct BioFuture {
     pub inner: Bio,
     pub done: i32,
-    pub waker: std::cell::UnsafeCell<Option<Waker>>,
+    pub waker: Option<Waker>,
 }
 
 impl Future for BioFuture {
     type Output = i32;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Self::Output> {
         //dbg!(&self.done);
         match self.done {
             1 => Poll::Ready(self.done),
             _ => {
-                let mut v = self.waker.get();
-                *v = Some(cx.waker().clone());
+                cx.waker();
+                self.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
         }
@@ -134,12 +140,10 @@ async fn start4() {
         let fut = BioFuture {
             inner: Bio(NonNull::new(bio.as_ptr()).unwrap()),
             done: 0,
-            waker: UnsafeCell::new(None),
+            waker: None,
         };
 
-        pin_utils::pin_mut!(fut);
-
-        let ptr = &fut.waker as *const _ as *mut c_void;
+        let ptr = &fut as *const _ as *mut c_void;
         dbg!(ptr);
         bdev_io_init(
             bio.as_ptr(),
@@ -153,7 +157,9 @@ async fn start4() {
         std::mem::forget(buf);
 
         bdev_io_submit(bio.as_ptr());
-        fut.await;
+        Reactors::master().send_future(async {
+            fut.await;
+        });
     }
 }
 async fn start3() {
