@@ -160,17 +160,19 @@ function startProcess (command, args, env, closeCb, psName) {
 }
 
 // Start spdk process and return immediately.
-function startSpdk (config, args, env) {
+function startTgt (config, args, env, yaml) {
   args = args || ['-r', SOCK];
   env = env || {};
 
-  if (config) {
-    fs.writeFileSync(SPDK_CONFIG_PATH, config);
-    args = args.concat(['-c', SPDK_CONFIG_PATH]);
+  if (yaml) {
+    fs.writeFileSync(MS_CONFIG_PATH, yaml);
+    args = args.concat(['-y', MS_CONFIG_PATH]);
   }
 
+  fs.symlinkSync( getCmdPath('mayastor'), getCmdPath('tgt'), null);
+
   startProcess(
-    'spdk',
+    'tgt',
     args,
     _.assign(
       {
@@ -181,6 +183,7 @@ function startSpdk (config, args, env) {
     () => {
       try {
         fs.unlinkSync(SPDK_CONFIG_PATH);
+        fs.unlinkSync(getCmdPath('tgt'));
       } catch (err) {}
     },
     'reactor_0'
@@ -188,7 +191,7 @@ function startSpdk (config, args, env) {
 }
 
 // Start mayastor process and return immediately.
-function startMayastor (config, args, env, yaml) {
+function startMayastor (config, args, env, yaml, psname) {
   args = args || ['-r', SOCK, '-g', grpcEndpoint];
   env = env || {};
 
@@ -201,7 +204,7 @@ function startMayastor (config, args, env, yaml) {
     fs.writeFileSync(MS_CONFIG_PATH, config);
     args = args.concat(['-c', MS_CONFIG_PATH]);
   }
-
+  let procname = psname || 'mayastor';
   startProcess(
     'mayastor',
     args,
@@ -217,7 +220,7 @@ function startMayastor (config, args, env, yaml) {
         fs.unlinkSync(MS_CONFIG_PATH);
       } catch (err) {}
     },
-    'mayastor'
+    procname,
   );
 }
 
@@ -467,7 +470,7 @@ module.exports = {
   CSI_ENDPOINT,
   CSI_ID,
   SOCK,
-  startSpdk,
+  startSpdk: startTgt,
   startMayastor,
   startMayastorCsi,
   stopAll,
