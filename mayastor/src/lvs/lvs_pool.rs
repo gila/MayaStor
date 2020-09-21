@@ -25,6 +25,7 @@ use spdk_sys::{
     LVOL_CLEAR_WITH_UNMAP,
     LVOL_CLEAR_WITH_WRITE_ZEROES,
     LVS_CLEAR_WITH_NONE,
+    LVS_CLEAR_WITH_WRITE_ZEROES,
     SPDK_BDEV_IO_TYPE_UNMAP,
 };
 
@@ -526,12 +527,8 @@ impl Lvs {
         size: u64,
         thin: bool,
     ) -> Result<Lvol, Error> {
-        let clear_method =
-            if self.base_bdev().io_type_supported(SPDK_BDEV_IO_TYPE_UNMAP) {
-                LVOL_CLEAR_WITH_UNMAP
-            } else {
-                LVOL_CLEAR_WITH_WRITE_ZEROES
-            };
+        // aio and uring do not support unmap - there for always use WRITE_ZERO
+        let clear_method = LVOL_CLEAR_WITH_WRITE_ZEROES;
 
         if Bdev::lookup_by_name(name).is_some() {
             return Err(Error::RepExists {
