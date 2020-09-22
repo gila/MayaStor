@@ -4,7 +4,7 @@
 //! panic macros. The caller can decide how to handle the error appropriately.
 //! Panics and asserts in this file are still ok for usage & programming errors.
 
-use std::{env, io, io::Write, process::Command, time::Duration};
+use std::{io, io::Write, process::Command, time::Duration};
 
 use crossbeam::channel::{after, select, unbounded};
 use once_cell::sync::OnceCell;
@@ -21,9 +21,10 @@ use mayastor::{
 use spdk_sys::spdk_get_thread;
 
 pub mod bdev_io;
+mod compose;
 pub mod error_bdev;
 pub mod ms_exec;
-
+pub use compose::{Builder, ComposeTest, MayastorTest, RpcHandle};
 /// call F cnt times, and sleep for a duration between each invocation
 pub fn retry<F, T, E>(mut cnt: u32, timeout: Duration, mut f: F) -> T
 where
@@ -67,7 +68,7 @@ macro_rules! reactor_poll {
         }
     };
     ($n:expr) => {
-        for _ in 0 .. $n {
+        for _ in 0..$n {
             mayastor::core::Reactors::current().poll_once();
         }
         mayastor::core::Reactors::current();
@@ -134,7 +135,6 @@ pub fn mayastor_test_init() {
         });
 
     logger::init("DEBUG");
-    env::set_var("MAYASTOR_LOGLEVEL", "4");
     mayastor::CPS_INIT!();
 }
 

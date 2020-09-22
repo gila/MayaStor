@@ -5,14 +5,8 @@ use std::convert::TryFrom;
 use url::Url;
 
 use rpc::mayastor::{
-    bdev_rpc_server::BdevRpc,
-    Bdev as RpcBdev,
-    BdevShareReply,
-    BdevShareRequest,
-    BdevUri,
-    Bdevs,
-    CreateReply,
-    Null,
+    bdev_rpc_server::BdevRpc, Bdev as RpcBdev, BdevShareReply,
+    BdevShareRequest, BdevUri, Bdevs, CreateReply, Null,
 };
 
 use crate::{
@@ -24,15 +18,15 @@ use crate::{
 impl From<NexusBdevError> for tonic::Status {
     fn from(e: NexusBdevError) -> Self {
         match e {
-            NexusBdevError::UrlParseError {
-                ..
-            } => Status::invalid_argument(e.to_string()),
-            NexusBdevError::UriSchemeUnsupported {
-                ..
-            } => Status::invalid_argument(e.to_string()),
-            NexusBdevError::UriInvalid {
-                ..
-            } => Status::invalid_argument(e.to_string()),
+            NexusBdevError::UrlParseError { .. } => {
+                Status::invalid_argument(e.to_string())
+            }
+            NexusBdevError::UriSchemeUnsupported { .. } => {
+                Status::invalid_argument(e.to_string())
+            }
+            NexusBdevError::UriInvalid { .. } => {
+                Status::invalid_argument(e.to_string())
+            }
             e => Status::internal(e.to_string()),
         }
     }
@@ -67,9 +61,7 @@ impl BdevRpc for BdevSvc {
             bdev.into_iter().for_each(|bdev| list.push(bdev.into()))
         }
 
-        Ok(Response::new(Bdevs {
-            bdevs: list,
-        }))
+        Ok(Response::new(Bdevs { bdevs: list }))
     }
 
     #[instrument(level = "debug", err)]
@@ -81,9 +73,7 @@ impl BdevRpc for BdevSvc {
             let uri = request.into_inner().uri;
             let bdev = locally! { async move { bdev_create(&uri).await } };
 
-            Ok(Response::new(CreateReply {
-                name: bdev,
-            }))
+            Ok(Response::new(CreateReply { name: bdev }))
         })
         .await
     }
@@ -135,7 +125,6 @@ impl BdevRpc for BdevSvc {
                 _ => unreachable!(),
             }
             .await
-            .unwrap()
             .map(|share| {
                 let bdev = Bdev::lookup_by_name(&name).unwrap();
                 Response::new(BdevShareReply {
@@ -158,7 +147,7 @@ impl BdevRpc for BdevSvc {
                     .map_err(|e| Status::internal(e.to_string()));
             });
 
-            hdl.await.unwrap();
+            hdl.await;
             Ok(Response::new(Null {}))
         })
         .await

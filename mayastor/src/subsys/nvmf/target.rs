@@ -7,24 +7,13 @@ use std::{
 use nix::errno::Errno;
 
 use spdk_sys::{
-    spdk_env_get_core_count,
-    spdk_nvmf_poll_group_destroy,
-    spdk_nvmf_subsystem_create,
-    spdk_nvmf_subsystem_set_mn,
-    spdk_nvmf_target_opts,
-    spdk_nvmf_tgt,
-    spdk_nvmf_tgt_accept,
-    spdk_nvmf_tgt_create,
-    spdk_nvmf_tgt_destroy,
-    spdk_nvmf_tgt_listen,
-    spdk_nvmf_tgt_stop_listen,
-    spdk_poller,
-    spdk_poller_register_named,
-    spdk_poller_unregister,
-    spdk_subsystem_fini_next,
-    spdk_subsystem_init_next,
-    SPDK_NVMF_DISCOVERY_NQN,
-    SPDK_NVMF_SUBTYPE_DISCOVERY,
+    spdk_env_get_core_count, spdk_nvmf_poll_group_destroy,
+    spdk_nvmf_subsystem_create, spdk_nvmf_subsystem_set_mn,
+    spdk_nvmf_target_opts, spdk_nvmf_tgt, spdk_nvmf_tgt_accept,
+    spdk_nvmf_tgt_create, spdk_nvmf_tgt_destroy, spdk_nvmf_tgt_listen,
+    spdk_nvmf_tgt_stop_listen, spdk_poller, spdk_poller_register_named,
+    spdk_poller_unregister, spdk_subsystem_fini_next, spdk_subsystem_init_next,
+    SPDK_NVMF_DISCOVERY_NQN, SPDK_NVMF_SUBTYPE_DISCOVERY,
 };
 
 use crate::{
@@ -36,8 +25,7 @@ use crate::{
             subsystem::NvmfSubsystem,
             transport,
             transport::{get_ipv4_address, TransportID},
-            Error,
-            NVMF_PGS,
+            Error, NVMF_PGS,
         },
         Config,
     },
