@@ -16,8 +16,8 @@ use rpc::mayastor::{
 };
 
 use crate::{
-    core::{Bdev, Reactors, Share},
-    grpc::{sync_config, GrpcResult},
+    core::{Bdev, Reactor, Reactors, Share},
+    grpc::{rpc_call, sync_config, GrpcResult},
     nexus_uri::{bdev_create, bdev_destroy, NexusBdevError},
 };
 
@@ -135,7 +135,6 @@ impl BdevRpc for BdevSvc {
                 _ => unreachable!(),
             }
             .await
-            .unwrap()
             .map(|share| {
                 let bdev = Bdev::lookup_by_name(&name).unwrap();
                 Response::new(BdevShareReply {
@@ -158,7 +157,7 @@ impl BdevRpc for BdevSvc {
                     .map_err(|e| Status::internal(e.to_string()));
             });
 
-            hdl.await.unwrap();
+            hdl.await;
             Ok(Response::new(Null {}))
         })
         .await

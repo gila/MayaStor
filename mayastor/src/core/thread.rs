@@ -77,14 +77,14 @@ impl Mthread {
 
     #[inline]
     pub fn enter(self) -> Self {
-        debug!("setting thread {:?}", self);
+        trace!("setting thread {:?}", self);
         unsafe { spdk_set_thread(self.0) };
         self
     }
 
     #[inline]
     pub fn exit(self) -> Self {
-        debug!("exit thread {:?}", self);
+        trace!("exit thread {:?}", self);
         unsafe { spdk_set_thread(std::ptr::null_mut()) };
         self
     }
@@ -213,7 +213,7 @@ impl Mthread {
                 &set,
             );
 
-            info!("pthread started on core {}", libc::sched_getcpu());
+            debug!("pthread started on core {}", libc::sched_getcpu());
         }
     }
 }

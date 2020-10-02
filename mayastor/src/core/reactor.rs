@@ -115,7 +115,7 @@ pub struct Reactor {
 
 thread_local! {
     /// This queue holds any in coming futures from other cores
-    static QUEUE: (Sender<async_task::Task<()>>, Receiver<async_task::Task<()>>) = unbounded();
+    static QUEUE: (Sender<async_task::Runnable>, Receiver<async_task::Runnable>) = unbounded();
 }
 
 impl Reactors {
@@ -301,10 +301,9 @@ impl Reactor {
         });
     }
 
-    /// receive futures if any
     fn receive_futures(&self) {
         self.rx.try_iter().for_each(|m| {
-            self.spawn_local(m);
+            self.spawn_local(m).detach();
         });
     }
 
@@ -317,7 +316,7 @@ impl Reactor {
     }
 
     /// spawn a future locally on this core
-    pub fn spawn_local<F, R>(&self, future: F) -> async_task::JoinHandle<R, ()>
+    pub fn spawn_local<F, R>(&self, future: F) -> async_task::Task<R>
     where
         F: Future<Output = R> + 'static,
         R: 'static,
@@ -327,7 +326,7 @@ impl Reactor {
         // busy etc.
         let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
 
-        let (task, handle) = async_task::spawn_local(future, schedule, ());
+        let (task, handle) = async_task::spawn_local(future, schedule);
         task.schedule();
         // the handler typically has no meaning to us unless we want to wait for
         // the spawned future to complete before we continue which is
@@ -345,9 +344,8 @@ impl Reactor {
         let _thread = Mthread::current();
         Mthread::get_init().enter();
         let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-        let (task, handle) = async_task::spawn_local(future, schedule, ());
-
-        let waker = handle.waker();
+        let (task, handle) = async_task::spawn_local(future, schedule);
+        let waker = task.waker();
         let cx = &mut Context::from_waker(&waker);
 
         pin_utils::pin_mut!(handle);
@@ -366,7 +364,7 @@ impl Reactor {
                         );
                         t.enter()
                     });
-                    return output;
+                    return Some(output);
                 }
                 Poll::Pending => {
                     reactor.poll_once();

@@ -755,31 +755,24 @@ impl MayastorEnvironment {
             .build()
             .unwrap();
 
-        let local = task::LocalSet::new();
         rt.block_on(async {
-            local
-                .run_until(async {
-                    let master = Reactors::current();
-                    master.send_future(async { f() });
-                    let mut futures: Vec<
-                        Pin<Box<dyn future::Future<Output = FutureResult>>>,
-                    > = Vec::new();
-                    if let Some(grpc_ep) = grpc_endpoint.as_ref() {
-                        futures.push(Box::pin(grpc::MayastorGrpcServer::run(
-                            grpc_ep,
-                        )));
-                        if let Some(nats_ep) = nats_endpoint.as_ref() {
-                            futures.push(Box::pin(nats::message_bus_run(
-                                nats_ep, &node_name, grpc_ep,
-                            )));
-                        }
-                    };
-                    futures.push(Box::pin(master));
-                    let _out = future::try_join_all(futures).await;
-                    info!("reactors stopped");
-                    Self::fini();
-                })
-                .await
+            let master = Reactors::current();
+            master.send_future(async { f() });
+            let mut futures: Vec<
+                Pin<Box<dyn future::Future<Output = FutureResult>>>,
+            > = Vec::new();
+            if let Some(grpc_ep) = grpc_endpoint.as_ref() {
+                futures.push(Box::pin(grpc::MayastorGrpcServer::run(grpc_ep)));
+                if let Some(nats_ep) = nats_endpoint.as_ref() {
+                    futures.push(Box::pin(nats::message_bus_run(
+                        nats_ep, &node_name, grpc_ep,
+                    )));
+                }
+            };
+            futures.push(Box::pin(master));
+            let _out = future::try_join_all(futures).await;
+            info!("reactors stopped");
+            Self::fini();
         });
 
         Ok(*GLOBAL_RC.lock().unwrap())
