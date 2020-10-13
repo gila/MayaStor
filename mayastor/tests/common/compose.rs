@@ -1,23 +1,32 @@
-use std::collections::HashMap;
-use std::future::Future;
-use std::net::Ipv4Addr;
 use std::{
-    net::{SocketAddr, TcpStream},
+    collections::HashMap,
+    future::Future,
+    net::{Ipv4Addr, SocketAddr, TcpStream},
     thread,
     time::Duration,
 };
 
-use bollard::network::CreateNetworkOptions;
 use bollard::{
     container::{
-        Config, CreateContainerOptions, ListContainersOptions, LogsOptions,
-        NetworkingConfig, RemoveContainerOptions, StopContainerOptions,
+        Config,
+        CreateContainerOptions,
+        ListContainersOptions,
+        LogsOptions,
+        NetworkingConfig,
+        RemoveContainerOptions,
+        StopContainerOptions,
     },
     errors::Error,
-    network::ListNetworksOptions,
+    network::{CreateNetworkOptions, ListNetworksOptions},
     service::{
-        ContainerSummaryInner, EndpointIpamConfig, EndpointSettings,
-        HostConfig, Ipam, Mount, MountTypeEnum, Network,
+        ContainerSummaryInner,
+        EndpointIpamConfig,
+        EndpointSettings,
+        HostConfig,
+        Ipam,
+        Mount,
+        MountTypeEnum,
+        Network,
     },
     Docker,
 };
@@ -27,10 +36,15 @@ use tokio::sync::oneshot::channel;
 use tonic::transport::Channel;
 
 use ::rpc::mayastor::{
-    bdev_rpc_client::BdevRpcClient, mayastor_client::MayastorClient,
+    bdev_rpc_client::BdevRpcClient,
+    mayastor_client::MayastorClient,
 };
 use mayastor::core::{
-    mayastor_env_stop, MayastorCliArgs, MayastorEnvironment, Reactor, Reactors,
+    mayastor_env_stop,
+    MayastorCliArgs,
+    MayastorEnvironment,
+    Reactor,
+    Reactors,
 };
 
 #[derive(Clone)]
@@ -75,8 +89,8 @@ impl RpcHandle {
 pub struct Builder {
     /// name of the experiment this name will be used as a network and labels
     /// this way we can "group" all objects within docker to match this test
-    /// test. It is highly recommend you use a sane name for this as it will help you
-    /// during debugging
+    /// test. It is highly recommend you use a sane name for this as it will
+    /// help you during debugging
     name: String,
     /// containers we want to create, note these are mayastor containers
     /// only
@@ -406,7 +420,9 @@ impl ComposeTest {
             image: None, // notice we do not have a base image here
             hostname: Some(name),
             host_config: Some(host_config),
-            networking_config: Some(NetworkingConfig { endpoints_config }),
+            networking_config: Some(NetworkingConfig {
+                endpoints_config,
+            }),
             working_dir: Some(self.srcdir.as_str()),
             volumes: Some(
                 vec![
@@ -425,7 +441,12 @@ impl ComposeTest {
 
         let container = self
             .docker
-            .create_container(Some(CreateContainerOptions { name }), config)
+            .create_container(
+                Some(CreateContainerOptions {
+                    name,
+                }),
+                config,
+            )
             .await
             .unwrap();
 
@@ -450,7 +471,12 @@ impl ComposeTest {
         let id = self.containers.get(name).unwrap();
         if let Err(e) = self
             .docker
-            .stop_container(id.0.as_str(), Some(StopContainerOptions { t: 5 }))
+            .stop_container(
+                id.0.as_str(),
+                Some(StopContainerOptions {
+                    t: 5,
+                }),
+            )
             .await
         {
             // where already stopped
@@ -463,8 +489,8 @@ impl ComposeTest {
     }
 
     /// ge the logs from the container. It would be nice to make it implicit
-    /// that is, when you make a rpc call, whatever logs where created due to that
-    /// are returned
+    /// that is, when you make a rpc call, whatever logs where created due to
+    /// that are returned
     pub async fn logs(&self, name: &str) -> Result<(), Error> {
         let logs = self
             .docker
@@ -549,9 +575,9 @@ impl<'a> MayastorTest<'a> {
         rx.await.unwrap()
     }
 
-    /// starts mayastor, notice we start mayastor on a thread and return a handle to the
-    /// management core. This handle is used to spawn futures, and the thread handle can be used
-    /// to synchronize the shutdown
+    /// starts mayastor, notice we start mayastor on a thread and return a
+    /// handle to the management core. This handle is used to spawn futures,
+    /// and the thread handle can be used to synchronize the shutdown
     pub async fn new(args: MayastorCliArgs) -> MayastorTest<'static> {
         let (tx, rx) = channel::<&'static Reactor>();
 

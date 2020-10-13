@@ -1,6 +1,8 @@
-use mayastor::core::Bdev;
-use mayastor::nexus_uri::bdev_create;
-use mayastor::{bdev::nexus_create, core::MayastorCliArgs};
+use mayastor::{
+    bdev::nexus_create,
+    core::{Bdev, MayastorCliArgs},
+    nexus_uri::bdev_create,
+};
 use rpc::mayastor::{BdevShareRequest, BdevUri, Null};
 
 pub mod common;

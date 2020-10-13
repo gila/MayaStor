@@ -30,8 +30,14 @@
 //! processed (or completed) it is dropped from the queue. Unlike the native
 //! SPDK messages, these futures -- are allocated before they execute.
 use std::{
-    cell::RefCell, collections::VecDeque, fmt, fmt::Display, os::raw::c_void,
-    pin::Pin, slice::Iter, time::Duration,
+    cell::RefCell,
+    collections::VecDeque,
+    fmt,
+    fmt::Display,
+    os::raw::c_void,
+    pin::Pin,
+    slice::Iter,
+    time::Duration,
 };
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -43,8 +49,11 @@ use once_cell::sync::OnceCell;
 use serde::export::Formatter;
 
 use spdk_sys::{
-    spdk_cpuset_get_cpu, spdk_env_thread_launch_pinned,
-    spdk_env_thread_wait_all, spdk_thread, spdk_thread_get_cpumask,
+    spdk_cpuset_get_cpu,
+    spdk_env_thread_launch_pinned,
+    spdk_env_thread_wait_all,
+    spdk_thread,
+    spdk_thread_get_cpumask,
     spdk_thread_lib_init_ext,
 };
 
@@ -307,8 +316,8 @@ impl Reactor {
         self.sx.send(Box::pin(future)).unwrap();
     }
 
-    /// spawn a future locally on this core; note that you can *not* use the handle
-    /// to complete the future with a different runtime.
+    /// spawn a future locally on this core; note that you can *not* use the
+    /// handle to complete the future with a different runtime.
     pub fn spawn_local<F, R>(&self, future: F) -> async_task::Task<R>
     where
         F: Future<Output = R> + 'static,
@@ -458,7 +467,7 @@ impl Reactor {
     /// queues
     pub fn poll_times(&self, times: u32) {
         let threads = self.threads.borrow();
-        for _ in 0..times {
+        for _ in 0 .. times {
             threads.iter().for_each(|t| {
                 t.poll();
             });
