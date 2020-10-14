@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use crossbeam::crossbeam_channel::bounded;
+
 use bollard::{
     container::{
         Config,
@@ -575,6 +577,13 @@ impl<'a> MayastorTest<'a> {
         rx.await.unwrap()
     }
 
+    pub fn send<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        self.reactor.send_future(future);
+    }
+
     /// starts mayastor, notice we start mayastor on a thread and return a
     /// handle to the management core. This handle is used to spawn futures,
     /// and the thread handle can be used to synchronize the shutdown
@@ -589,6 +598,23 @@ impl<'a> MayastorTest<'a> {
         });
 
         let reactor = rx.await.unwrap();
+        MayastorTest {
+            reactor,
+            thdl: Some(thdl),
+        }
+    }
+
+    pub fn old_new(args: MayastorCliArgs) -> MayastorTest<'static> {
+        let (tx, rx) = bounded(1);
+
+        let thdl = std::thread::spawn(move || {
+            MayastorEnvironment::new(args).init();
+            tx.send(Reactors::master()).unwrap();
+            Reactors::master().running();
+            Reactors::master().poll_reactor();
+        });
+
+        let reactor = rx.recv().unwrap();
         MayastorTest {
             reactor,
             thdl: Some(thdl),

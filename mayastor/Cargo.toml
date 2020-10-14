@@ -3,6 +3,8 @@ authors = ["Jeffry Molanus <jeffry.molanus@gmail.com>"]
 edition = "2018"
 name = "mayastor"
 version = "0.1.0"
+[profile.dev]
+panic = "abort"
 
 [[bin]]
 name = "mayastor"

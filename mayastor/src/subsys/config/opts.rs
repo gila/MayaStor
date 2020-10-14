@@ -248,7 +248,7 @@ impl Default for NvmeBdevOpts {
         Self {
             action_on_timeout: 1,
             timeout_us: 2_000_000,
-            retry_count: 5,
+            retry_count: 0,
             arbitration_burst: 0,
             low_priority_weight: 0,
             medium_priority_weight: 0,

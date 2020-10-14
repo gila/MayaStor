@@ -46,6 +46,7 @@ mkShell {
     procps
     python3
     utillinux
+    rust-analyzer
     xfsprogs
   ]
   ++ (if (nospdk) then [ libspdk-dev.buildInputs ] else [ libspdk-dev ])

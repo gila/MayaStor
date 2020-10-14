@@ -134,7 +134,7 @@ pub fn mayastor_test_init() {
             }
         });
 
-    logger::init("DEBUG");
+    logger::init("TRACE");
     mayastor::CPS_INIT!();
 }
 

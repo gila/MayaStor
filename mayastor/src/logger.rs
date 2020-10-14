@@ -55,7 +55,7 @@ pub extern "C" fn log_impl(
             .file(Some(filename))
             .line(Some(line))
             .level(from_spdk_level(spdk_level))
-            .build(),
+            .build()
     )
     .unwrap();
 }
