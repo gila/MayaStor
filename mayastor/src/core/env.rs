@@ -134,7 +134,7 @@ impl Default for MayastorCliArgs {
             mbus_endpoint: None,
             node_name: None,
             env_context: None,
-            reactor_mask: "0x1".into(),
+            reactor_mask: "0x3".into(),
             mem_size: 0,
             rpc_address: "/var/tmp/mayastor.sock".to_string(),
             no_pci: true,

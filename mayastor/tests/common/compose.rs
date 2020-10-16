@@ -55,7 +55,7 @@ use mayastor::core::{
 pub struct RpcHandle {
     pub name: String,
     pub endpoint: SocketAddr,
-    mayastor: MayastorClient<Channel>,
+    pub mayastor: MayastorClient<Channel>,
     pub bdev: BdevRpcClient<Channel>,
 }
 
