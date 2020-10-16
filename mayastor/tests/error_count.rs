@@ -38,7 +38,6 @@ async fn nexus_error_count_test() {
     config.err_store_opts.action = ActionType::Ignore;
     config.err_store_opts.err_store_size = 256;
     config.write(YAML_CONFIG_FILE).unwrap();
-    common::mayastor_test_init();
     let ms = MayastorTest::new(MayastorCliArgs {
         mayastor_config: Some(YAML_CONFIG_FILE.to_string()),
         reactor_mask: "0x3".to_string(),

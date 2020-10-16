@@ -37,7 +37,7 @@ use ipnetwork::Ipv4Network;
 use tokio::sync::oneshot::channel;
 use tonic::transport::Channel;
 
-use crate::common;
+use crate::{common, common::mayastor_test_init};
 use ::rpc::mayastor::{
     bdev_rpc_client::BdevRpcClient,
     mayastor_client::MayastorClient,
@@ -621,7 +621,7 @@ impl<'a> MayastorTest<'a> {
 
     pub fn new(args: MayastorCliArgs) -> MayastorTest<'static> {
         let (tx, rx) = bounded(1);
-
+        mayastor_test_init();
         let thdl = std::thread::Builder::new()
             .name("mayastor_master".into())
             .spawn(move || {
