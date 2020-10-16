@@ -89,7 +89,7 @@ pub struct MayastorCliArgs {
     #[structopt(short = "L")]
     /// Enable logging for sub components
     pub log_components: Vec<String>,
-    #[structopt(short = "m", default_value = "0x1")]
+    #[structopt(short = "m", default_value = "0x3")]
     /// The reactor mask to be used for starting up the instance
     pub reactor_mask: String,
     #[structopt(short = "N")]

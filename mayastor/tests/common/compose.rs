@@ -620,7 +620,6 @@ impl<'a> MayastorTest<'a> {
     }
 
     pub fn new(args: MayastorCliArgs) -> MayastorTest<'static> {
-        common::mayastor_test_init();
         let (tx, rx) = bounded(1);
 
         let thdl = std::thread::Builder::new()
