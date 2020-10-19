@@ -19,7 +19,6 @@ pub mod jsonrpc;
 pub mod logger;
 pub mod lvs;
 pub mod nexus_uri;
-pub mod pool;
 pub mod rebuild;
 pub mod replica;
 pub mod subsys;

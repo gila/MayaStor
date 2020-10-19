@@ -11,7 +11,7 @@
 //! This will update the configuration file but WILL NOT update the in-memory
 //! ChildStatusConfig structure as this is only required on startup and not
 //! during runtime.
-
+#![allow(dead_code)]
 use crate::bdev::nexus::{
     instances,
     nexus_channel::DREvent,

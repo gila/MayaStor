@@ -1,14 +1,7 @@
 //
 //! Main file to register additional subsystems
 
-pub use config::{
-    opts::NexusOpts,
-    BaseBdev,
-    Config,
-    ConfigSubsystem,
-    NexusBdev,
-    Pool,
-};
+pub use config::{opts::NexusOpts, Config, ConfigSubsystem, Pool};
 pub use nvmf::{
     set_snapshot_time,
     Error as NvmfError,

@@ -31,14 +31,12 @@ static NXNAME_SNAP: &str = "replica_snapshot_test-snap";
 fn generate_config() {
     let mut config = Config::default();
 
-    config.implicit_share_base = true;
     config.nexus_opts.iscsi_enable = false;
     config.nexus_opts.nvmf_replica_port = 8430;
     config.nexus_opts.nvmf_nexus_port = 8440;
     let pool = subsys::Pool {
         name: "pool0".to_string(),
         disks: vec!["aio://".to_string() + &DISKNAME1.to_string()],
-        replicas: Default::default(),
     };
     config.pools = Some(vec![pool]);
     config.write(CFGNAME1).unwrap();

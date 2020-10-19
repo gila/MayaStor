@@ -41,7 +41,6 @@ use spdk_sys::{
 };
 
 use crate::{
-    bdev::nexus::nexus_child_status_config::ChildStatusConfig,
     core::{
         reactor::{Reactor, ReactorState, Reactors},
         Cores,
@@ -655,18 +654,18 @@ impl MayastorEnvironment {
         }
     }
 
-    // load the child status file
-    fn load_child_status(&self) {
-        ChildStatusConfig::get_or_init(|| {
-            if let Ok(cfg) = ChildStatusConfig::load(&self.child_status_config)
-            {
-                cfg
-            } else {
-                // if the configuration is invalid exit early
-                panic!("Failed to load the child status configuration")
-            }
-        });
-    }
+    // // load the child status file
+    // fn load_child_status(&self) {
+    //     ChildStatusConfig::get_or_init(|| {
+    //         if let Ok(cfg) =
+    // ChildStatusConfig::load(&self.child_status_config)         {
+    //             cfg
+    //         } else {
+    //             // if the configuration is invalid exit early
+    //             panic!("Failed to load the child status configuration")
+    //         }
+    //     });
+    // }
 
     /// initialize the core, call this before all else
     pub fn init(mut self) -> Self {
@@ -682,7 +681,7 @@ impl MayastorEnvironment {
         // conflicting bdev definitions
         self.read_config_file().unwrap();
 
-        self.load_child_status();
+        //self.load_child_status();
 
         // bootstrap DPDK and its magic
         self.initialize_eal();
@@ -738,7 +737,7 @@ impl MayastorEnvironment {
         });
 
         // load any bdevs that need to be created
-        Config::get().import_bdevs();
+        Reactor::block_on(Config::get().import_pools());
 
         self
     }
