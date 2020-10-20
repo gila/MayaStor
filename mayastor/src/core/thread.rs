@@ -196,6 +196,12 @@ impl Mthread {
         })
     }
 
+    /// cores are relative to their mask, this value is absolute to the total
+    /// number of
+    pub fn cpu_get_current() -> i32 {
+        unsafe { libc::sched_getcpu() }
+    }
+
     pub fn unaffinitize() {
         unsafe {
             let mut set: libc::cpu_set_t = std::mem::zeroed();

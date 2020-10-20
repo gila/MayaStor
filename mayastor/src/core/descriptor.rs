@@ -18,6 +18,7 @@ use crate::{
     bdev::nexus::nexus_module::NEXUS_MODULE,
     core::{channel::IoChannel, Bdev, BdevHandle, CoreError, Mthread},
 };
+use std::ptr::NonNull;
 
 /// NewType around a descriptor, multiple descriptor to the same bdev is
 /// allowed. A bdev can be claimed for exclusive write access. Any existing
@@ -25,17 +26,19 @@ use crate::{
 /// is. Typically, the target, exporting the bdev will claim the device. In the
 /// case of the nexus, we do not claim the children for exclusive access to
 /// allow for the rebuild to happen across multiple cores.
-pub struct Descriptor(*mut spdk_bdev_desc);
+pub struct Descriptor(NonNull<spdk_bdev_desc>);
+unsafe impl Sync for Descriptor {}
+unsafe impl Send for Descriptor {}
 
 impl Descriptor {
     /// returns the underling ptr
     pub fn as_ptr(&self) -> *mut spdk_bdev_desc {
-        self.0
+        self.0.as_ptr()
     }
 
     /// Get a channel to the underlying bdev
     pub fn get_channel(&self) -> Option<IoChannel> {
-        let ch = unsafe { spdk_bdev_get_io_channel(self.0) };
+        let ch = unsafe { spdk_bdev_get_io_channel(self.0.as_ptr()) };
         if ch.is_null() {
             None
         } else {
@@ -51,7 +54,7 @@ impl Descriptor {
         let err = unsafe {
             spdk_bdev_module_claim_bdev(
                 self.get_bdev().as_ptr(),
-                self.0,
+                self.0.as_ptr(),
                 NEXUS_MODULE.as_ptr(),
             )
         };
@@ -73,7 +76,8 @@ impl Descriptor {
     /// Return the bdev associated with this descriptor, a descriptor cannot
     /// exist without a bdev
     pub fn get_bdev(&self) -> Bdev {
-        let bdev = unsafe { spdk_bdev_desc_get_bdev(self.0) };
+        let bdev = unsafe { spdk_bdev_desc_get_bdev(self.0.as_ptr()) };
+
         Bdev::from(bdev)
     }
 
@@ -83,7 +87,7 @@ impl Descriptor {
         if desc.is_null() {
             None
         } else {
-            Some(Descriptor(desc))
+            unsafe { Some(Descriptor(NonNull::new_unchecked(desc))) }
         }
     }
 
@@ -173,10 +177,10 @@ impl Drop for Descriptor {
         trace!("[D] {:?}", self);
         if Mthread::current().unwrap() == Mthread::get_init() {
             unsafe {
-                spdk_bdev_close(self.0);
+                spdk_bdev_close(self.0.as_ptr());
             }
         } else {
-            Mthread::get_init().send_msg(_bdev_close, self.0 as *mut _);
+            Mthread::get_init().send_msg(_bdev_close, self.0.as_ptr().cast());
         }
     }
 }

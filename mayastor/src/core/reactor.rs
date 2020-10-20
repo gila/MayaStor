@@ -58,7 +58,7 @@ use spdk_sys::{
 };
 
 use crate::core::{Cores, Mthread};
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReactorState {
@@ -111,6 +111,7 @@ pub struct Reactor {
     /// through FFI
     sx: Sender<Pin<Box<dyn Future<Output = ()> + 'static>>>,
     rx: Receiver<Pin<Box<dyn Future<Output = ()> + 'static>>>,
+    async_poll: UnsafeCell<bool>,
 }
 
 thread_local! {
@@ -271,6 +272,7 @@ impl Reactor {
             flags: Cell::new(ReactorState::Init),
             sx,
             rx,
+            async_poll: UnsafeCell::new(true),
         }
     }
 
@@ -297,7 +299,11 @@ impl Reactor {
         QUEUE.with(|(_, r)| {
             r.try_iter().for_each(|f| {
                 f.run();
-            })
+            });
+
+            if r.is_empty() {
+                unsafe { *self.async_poll.get() = false };
+            }
         });
     }
 
@@ -313,6 +319,7 @@ impl Reactor {
     where
         F: Future<Output = ()> + 'static,
     {
+        unsafe { *self.async_poll.get() = true };
         self.sx.send(Box::pin(future)).unwrap();
     }
 
@@ -330,6 +337,7 @@ impl Reactor {
 
         let (runnable, task) = async_task::spawn_local(future, schedule);
         runnable.schedule();
+        unsafe { *self.async_poll.get() = true };
         // the handler typically has no meaning to us unless we want to wait for
         // the spawned future to complete before we continue which is
         // done, in example with ['block_on']
@@ -370,7 +378,15 @@ impl Reactor {
                     return Some(output);
                 }
                 Poll::Pending => {
-                    reactor.poll_once();
+                    reactor.receive_futures();
+                    reactor.run_futures();
+                    reactor.threads.borrow().iter().for_each(|t| {
+                        t.poll();
+                    });
+
+                    while let Ok(i) = reactor.incoming.pop() {
+                        reactor.threads.borrow_mut().push_back(i);
+                    }
                 }
             };
         }
@@ -449,8 +465,10 @@ impl Reactor {
     /// now
     #[inline]
     pub fn poll_once(&self) {
-        self.receive_futures();
-        self.run_futures();
+        if unsafe { *self.async_poll.get() } {
+            self.receive_futures();
+            self.run_futures();
+        }
         self.threads.borrow().iter().for_each(|t| {
             t.poll();
         });

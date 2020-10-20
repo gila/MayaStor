@@ -30,7 +30,7 @@ path = "src/bin/jsonrpc.rs"
 
 [[bin]]
 name = "casperf"
-path = "src/bin/casperf.rs"
+path = "src/bin/casperf/casperf.rs"
 
 [dependencies]
 async-task = "4.0.2"
