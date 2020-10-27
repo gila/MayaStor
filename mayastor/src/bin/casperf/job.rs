@@ -3,6 +3,7 @@ use mayastor::{
     core::{mayastor_env_stop, Bdev, Descriptor, DmaBuf, IoChannel, Reactors},
     nexus_uri::bdev_create,
 };
+
 use once_cell::sync::OnceCell;
 use rand::Rng;
 use spdk_sys::{
@@ -11,11 +12,71 @@ use spdk_sys::{
     spdk_bdev_write,
     spdk_io_channel,
 };
-use std::{cell::RefCell, ptr::NonNull, sync::Mutex};
+
+use std::{
+    cell::RefCell,
+    ptr::NonNull,
+    sync::{LockResult, Mutex, MutexGuard},
+};
 
 pub struct JobList {
-    inner: RefCell<Vec<Box<Job>>>,
+    inner: Mutex<Vec<Box<Job>>>,
     num: u32,
+}
+
+impl JobList {
+    pub fn get() -> &'static JobList {
+        static JOBLIST: OnceCell<JobList> = OnceCell::new();
+
+        &JOBLIST.get_or_init(|| JobList {
+            inner: Mutex::new(vec![]),
+            num: 0,
+        })
+    }
+
+    pub fn add(&self, job: Box<Job>) {
+        self.inner.lock().unwrap().push(job);
+    }
+
+    pub fn drain(&self, bdev_name: String) {
+        let mut list = self.inner.lock().unwrap();
+        list.retain(|this| this.bdev_name != bdev_name);
+    }
+
+    pub fn drain_all(&self) {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .for_each(|j| j.drain = true);
+    }
+
+    pub fn empty(&self) -> bool {
+        self.inner.lock().unwrap().is_empty()
+    }
+
+    pub fn stats(&self) -> i32 {
+        let mut total_io_per_second = 0;
+        let mut total_mb_per_second = 0;
+        self.inner.lock().unwrap().iter_mut().for_each(|j| {
+            j.period += 1;
+            let io_per_second = j.n_io / j.period;
+            let mb_per_second = io_per_second * j.io_size / (1024 * 1024);
+            println!(
+                "\r {:20}: {:10} IO/s {:10}: MB/s",
+                j.name(),
+                io_per_second,
+                mb_per_second
+            );
+            total_io_per_second += io_per_second;
+            total_mb_per_second += mb_per_second;
+            println!(
+                "\r {:20}: {:10} IO/s {:10}: MB/s\n",
+                "Total", total_io_per_second, total_mb_per_second
+            );
+        });
+        0
+    }
 }
 
 /// a Job refers to a set of work typically defined by either time or size
@@ -36,7 +97,7 @@ pub(crate) struct Job {
     /// aligned set of IOs we can do
     io_blocks: u64,
     /// io queue
-    queue: Mutex<Vec<Io>>,
+    queue: Vec<Io>,
     /// number of IO's completed
     n_io: u64,
     /// number of IO's currently inflight
@@ -48,64 +109,6 @@ pub(crate) struct Job {
     drain: bool,
     /// number of seconds we are running
     period: u64,
-}
-
-impl JobList {
-    pub fn get() -> &'static JobList {
-        static JOBLIST: OnceCell<JobList> = OnceCell::new();
-
-        &JOBLIST.get_or_init(|| JobList {
-            inner: RefCell::new(vec![]),
-            num: 0,
-        })
-    }
-
-    pub fn add(&self, job: Box<Job>) {
-        self.inner.borrow_mut().push(job);
-    }
-
-    pub fn drain(&self, bdev_name: String) {
-        let mut list = self.inner.borrow_mut();
-        list.retain(|this| this.bdev_name != bdev_name);
-    }
-
-    pub fn drain_all(&self) {
-        self.inner
-            .borrow_mut()
-            .iter_mut()
-            .for_each(|j| j.drain = true);
-    }
-
-    pub fn empty(&self) -> bool {
-        self.inner.borrow().is_empty()
-    }
-
-    pub fn stats(&self) -> i32 {
-        let mut total_io_per_second = 0;
-        let mut total_mb_per_second = 0;
-        self.inner.borrow_mut().iter_mut().for_each(|j| {
-            j.period += 1;
-            let io_per_second = j.n_io / j.period;
-            let mb_per_second = io_per_second * j.io_size / (1024 * 1024);
-            println!(
-                "\r {:20}: {:10} IO/s {:10}: MB/s",
-                j.name(),
-                io_per_second,
-                mb_per_second
-            );
-            total_io_per_second += io_per_second;
-            total_mb_per_second += mb_per_second;
-            println!(
-                "\r {:20}: {:10} IO/s {:10}: MB/s\n",
-                "Total", total_io_per_second, total_mb_per_second
-            );
-        });
-        0
-    }
-
-    pub fn channel(&self) -> NonNull<spdk_io_channel> {
-        self.desc.get_channel()
-    }
 }
 
 impl Job {
@@ -172,7 +175,7 @@ impl Job {
                 iot: IoType::READ,
                 offset,
                 job: NonNull::dangling(),
-                ch: NonNull::dangling(),
+                ch: None,
             });
         });
 
@@ -183,7 +186,7 @@ impl Job {
             io_size: size,
             blk_size,
             num_blocks,
-            queue: Mutex::new(queue),
+            queue,
             io_blocks,
             n_io: 0,
             n_inflight: 0,
@@ -203,13 +206,8 @@ impl Job {
 
     /// start the job that will dispatch an IO up to the provided queue depth
     pub fn run(mut self: Box<Self>) {
-        self.ch = self.desc.get_channel().unwrap();
         let ptr = self.as_ptr();
-        self.queue
-            .lock()
-            .unwrap()
-            .iter_mut()
-            .for_each(|q| q.run(ptr));
+        self.queue.iter_mut().for_each(|q| q.run(ptr));
         JobList::get().add(self)
     }
 }
@@ -224,14 +222,15 @@ struct Io {
     offset: u64,
     /// pointer to our the job we belong too
     job: NonNull<Job>,
-    ch: NonNull<spdk_io_channel>,
+    ch: Option<IoChannel>,
 }
 
 impl Io {
     /// start submitting
     fn run(&mut self, job: *mut Job) {
-        self.job = NonNull::new(job).unwrap();
-        self.ch = self.job.get_channel();
+        let job = NonNull::<Job>::new(job).unwrap();
+        self.ch = unsafe { job.as_ref().desc.get_channel() };
+
         match self.iot {
             IoType::READ => self.read(0),
             IoType::WRITE => self.write(0),
@@ -251,7 +250,7 @@ impl Io {
         unsafe {
             if spdk_bdev_read(
                 self.job.as_ref().desc.as_ptr(),
-                self.job.as_ref().ch.as_ref().unwrap().as_ptr(),
+                self.ch.as_ref().unwrap().as_ptr(),
                 *self.buf,
                 offset,
                 self.buf.len(),
@@ -274,7 +273,7 @@ impl Io {
         unsafe {
             if spdk_bdev_write(
                 self.job.as_ref().desc.as_ptr(),
-                self.job.as_ref().ch.as_ref().unwrap().as_ptr(),
+                self.ch.as_ref().unwrap().as_ptr(),
                 *self.buf,
                 offset,
                 self.buf.len(),
