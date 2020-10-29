@@ -31,7 +31,7 @@ fn print_error_chain(err: &dyn std::error::Error) -> String {
 #[macro_export]
 macro_rules! locally {
     ($body:expr) => {{
-        let hdl = crate::core::Reactors::current().spawn_local($body);
+        let hdl = crate::core::Reactors::master().spawn_local($body);
         match hdl.await {
             Ok(res) => res,
             Err(err) => {

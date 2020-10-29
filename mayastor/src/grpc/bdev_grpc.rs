@@ -16,7 +16,7 @@ use rpc::mayastor::{
 };
 
 use crate::{
-    core::{Bdev, Reactors, Share},
+    core::{Bdev, Reactor, Reactors, Share},
     grpc::{sync_config, GrpcResult},
     nexus_uri::{bdev_create, bdev_destroy, NexusBdevError},
 };

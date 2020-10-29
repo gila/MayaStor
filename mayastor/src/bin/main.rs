@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate tracing;
 
-use futures::FutureExt;
 use mayastor::{
     bdev::util::uring,
     core::{MayastorCliArgs, MayastorEnvironment, Reactors},
@@ -12,14 +11,11 @@ use mayastor::{
 use std::path::Path;
 use structopt::StructOpt;
 mayastor::CPS_INIT!();
+use smol::{future, io, net, prelude::*, LocalExecutor, Unblock};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = MayastorCliArgs::from_args();
 
-    let mut rt = tokio::runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let local_ex = LocalExecutor::new();
 
     // setup our logger first if -L is passed, raise the log level
     // automatically. trace maps to debug at FFI level. If RUST_LOG is
@@ -53,20 +49,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_endpoint = grpc::endpoint(args.grpc_endpoint.clone());
     let rpc_address = args.rpc_address.clone();
 
-    let ms = rt.enter(|| MayastorEnvironment::new(args).init());
-
+    let ms = MayastorEnvironment::new(args).init();
     let master = Reactors::master();
     master.send_future(async { info!("Mayastor started {} ...", '\u{1F680}') });
-    let mut futures = Vec::new();
+    master
+        .spawn_local(async_compat::Compat::new(grpc::MayastorGrpcServer::run(
+            grpc_endpoint,
+            rpc_address,
+        )))
+        .detach();
 
-    futures.push(master.boxed_local());
-    futures.push(subsys::Registration::run().boxed_local());
-    futures.push(
-        grpc::MayastorGrpcServer::run(grpc_endpoint, rpc_address).boxed_local(),
-    );
+    Reactors::launch_master();
+    //let mut futures = Vec::new();
 
-    rt.block_on(futures::future::try_join_all(futures))
-        .expect_err("reactor exit in abnormal state");
+    //
+    // futures.push(master.boxed_local());
+    // futures.push(subsys::Registration::run().boxed_local());
+    // futures.push(
+    // );
+    //
+    // future::block_on(local_ex.run(futures::future::try_join_all(futures)))
+    //     .unwrap();
 
     ms.fini();
     Ok(())

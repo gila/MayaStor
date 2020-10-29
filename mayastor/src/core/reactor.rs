@@ -29,6 +29,10 @@
 //! is used for holding on to the messages while it is being processed. Once
 //! processed (or completed) it is dropped from the queue. Unlike the native
 //! SPDK messages, these futures -- are allocated before they execute.
+use crate::core::ltq::LocalExecutor;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use once_cell::sync::OnceCell;
+use serde::export::Formatter;
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -40,14 +44,6 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use futures::{
-    task::{Context, Poll},
-    Future,
-};
-use once_cell::sync::OnceCell;
-use serde::export::Formatter;
-
 use spdk_sys::{
     spdk_cpuset_get_cpu,
     spdk_env_thread_launch_pinned,
@@ -58,7 +54,11 @@ use spdk_sys::{
 };
 
 use crate::core::{Cores, Mthread};
-use std::cell::Cell;
+use std::{
+    cell::Cell,
+    future::Future,
+    task::{Context, Poll},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReactorState {
@@ -111,6 +111,7 @@ pub struct Reactor {
     /// through FFI
     sx: Sender<Pin<Box<dyn Future<Output = ()> + 'static>>>,
     rx: Receiver<Pin<Box<dyn Future<Output = ()> + 'static>>>,
+    ex: LocalExecutor,
 }
 
 thread_local! {
@@ -271,6 +272,7 @@ impl Reactor {
             flags: Cell::new(ReactorState::Init),
             sx,
             rx,
+            ex: LocalExecutor::new(),
         }
     }
 
@@ -296,6 +298,7 @@ impl Reactor {
     fn run_futures(&self) {
         QUEUE.with(|(_, r)| {
             r.try_iter().for_each(|f| {
+                error!("wtf");
                 f.run();
             })
         });
@@ -304,7 +307,7 @@ impl Reactor {
     /// receive futures if any
     fn receive_futures(&self) {
         self.rx.try_iter().for_each(|m| {
-            self.spawn_local(m).detach();
+            self.ex.spawn_local(m).detach();
         });
     }
 
@@ -323,17 +326,7 @@ impl Reactor {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        // our scheduling right now is basically non-existent but -- in the
-        // future we want to schedule work to cores that are not very
-        // busy etc.
-        let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-
-        let (runnable, task) = async_task::spawn_local(future, schedule);
-        runnable.schedule();
-        // the handler typically has no meaning to us unless we want to wait for
-        // the spawned future to complete before we continue which is
-        // done, in example with ['block_on']
-        task
+        Reactors::master().ex.spawn_local(future)
     }
 
     /// spawn a future locally on the current core block until the future is
@@ -343,37 +336,38 @@ impl Reactor {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let _thread = Mthread::current();
-        Mthread::get_init().enter();
-        let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-        let (runnable, task) = async_task::spawn_local(future, schedule);
-
-        let waker = runnable.waker();
-        let cx = &mut Context::from_waker(&waker);
-
-        pin_utils::pin_mut!(task);
-        runnable.schedule();
-        let reactor = Reactors::master();
-
-        loop {
-            match task.as_mut().poll(cx) {
-                Poll::Ready(output) => {
-                    Mthread::get_init().exit();
-                    _thread.map(|t| {
-                        debug!(
-                            "restoring thread from {:?} to {:?}",
-                            Mthread::current(),
-                            _thread
-                        );
-                        t.enter()
-                    });
-                    return Some(output);
-                }
-                Poll::Pending => {
-                    reactor.poll_once();
-                }
-            };
-        }
+        Reactors::master().ex.loop_on(future)
+        // let _thread = Mthread::current();
+        // Mthread::get_init().enter();
+        // let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
+        // let (runnable, task) = async_task::spawn_local(future, schedule);
+        //
+        // let waker = runnable.waker();
+        // let cx = &mut Context::from_waker(&waker);
+        //
+        // pin_utils::pin_mut!(task);
+        // runnable.schedule();
+        // let reactor = Reactors::master();
+        //
+        // loop {
+        //     match task.as_mut().poll(cx) {
+        //         Poll::Ready(output) => {
+        //             Mthread::get_init().exit();
+        //             _thread.map(|t| {
+        //                 debug!(
+        //                     "restoring thread from {:?} to {:?}",
+        //                     Mthread::current(),
+        //                     _thread
+        //                 );
+        //                 t.enter()
+        //             });
+        //             return Some(output);
+        //         }
+        //         Poll::Pending => {
+        //             reactor.poll_once();
+        //         }
+        //     };
+        // }
     }
 
     /// set the state of this reactor
@@ -424,7 +418,7 @@ impl Reactor {
                 // running is the default mode for all cores. All cores, except
                 // the master core spin within this specific loop
                 ReactorState::Running => {
-                    self.poll_once();
+                    self.poll_times(128);
                 }
                 ReactorState::Shutdown => {
                     info!("reactor {} shutdown requested", self.lcore);
@@ -450,7 +444,9 @@ impl Reactor {
     #[inline]
     pub fn poll_once(&self) {
         self.receive_futures();
-        self.run_futures();
+        if self.ex.empty() {
+            self.ex.run_till_stalled();
+        }
         self.threads.borrow().iter().for_each(|t| {
             t.poll();
         });
@@ -473,9 +469,12 @@ impl Reactor {
             });
         }
 
-        self.receive_futures();
-        self.run_futures();
         drop(threads);
+
+        self.receive_futures();
+        if self.ex.empty() {
+            self.ex.run_till_stalled();
+        }
 
         while let Ok(i) = self.incoming.pop() {
             self.threads.borrow_mut().push_back(i);

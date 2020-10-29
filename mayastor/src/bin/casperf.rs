@@ -370,31 +370,34 @@ fn main() {
 
     MayastorEnvironment::new(args).init();
     sig_override();
-    Reactors::master().send_future(async move {
-        let jobs = uris
-            .iter_mut()
-            .map(|u| Job::new(u, io_size, qd))
-            .collect::<Vec<_>>();
+    Reactors::master()
+        .spawn_local(async move {
+            let jobs = uris
+                .iter_mut()
+                .map(|u| Job::new(u, io_size, qd))
+                .collect::<Vec<_>>();
 
-        for j in jobs {
-            let job = j.await;
-            let thread =
-                Mthread::new(job.bdev.name(), Cores::current()).unwrap();
-            thread.msg(job, |job| {
-                job.run();
-            });
-        }
+            for j in jobs {
+                let job = j.await;
+                let thread =
+                    Mthread::new(job.bdev.name(), Cores::current()).unwrap();
+                thread.msg(job, |job| {
+                    job.run();
+                });
+            }
 
-        unsafe {
-            PERF_TICK.with(|p| {
-                *p.borrow_mut() = NonNull::new(spdk_sys::spdk_poller_register(
-                    Some(perf_tick),
-                    std::ptr::null_mut(),
-                    1_000_000,
-                ))
-            });
-        }
-    });
+            unsafe {
+                PERF_TICK.with(|p| {
+                    *p.borrow_mut() =
+                        NonNull::new(spdk_sys::spdk_poller_register(
+                            Some(perf_tick),
+                            std::ptr::null_mut(),
+                            1_000_000,
+                        ))
+                });
+            }
+        })
+        .detach();
 
     Reactors::master().running();
     Reactors::master().poll_reactor();
