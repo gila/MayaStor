@@ -16,10 +16,18 @@ use rpc::mayastor::{
 };
 
 use crate::{
-    core::{Bdev, Reactor, Reactors, Share},
-    grpc::{sync_config, GrpcResult},
+    core::{Bdev, Reactors, Share},
+    grpc::GrpcResult,
+    jsonrpc::{
+        jsonrpc_register,
+        print_error_chain,
+        Code,
+        JsonRpcError,
+        RpcErrorCode,
+    },
     nexus_uri::{bdev_create, bdev_destroy, NexusBdevError},
 };
+use futures::FutureExt;
 
 impl From<NexusBdevError> for tonic::Status {
     fn from(e: NexusBdevError) -> Self {
@@ -34,6 +42,61 @@ impl From<NexusBdevError> for tonic::Status {
                 ..
             } => Status::invalid_argument(e.to_string()),
             e => Status::internal(e.to_string()),
+        }
+    }
+}
+
+impl From<NexusBdevError> for JsonRpcError {
+    fn from(e: NexusBdevError) -> Self {
+        JsonRpcError {
+            code: e.rpc_error_code(),
+            message: print_error_chain(&e),
+        }
+    }
+}
+
+impl RpcErrorCode for NexusBdevError {
+    fn rpc_error_code(&self) -> Code {
+        match self {
+            NexusBdevError::UrlParseError {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::BdevNoUri {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::UriSchemeUnsupported {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::UriInvalid {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::BoolParamParseError {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::IntParamParseError {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::UuidParamParseError {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::BdevExists {
+                ..
+            } => Code::AlreadyExists,
+            NexusBdevError::BdevNotFound {
+                ..
+            } => Code::NotFound,
+            NexusBdevError::InvalidParams {
+                ..
+            } => Code::InvalidParams,
+            NexusBdevError::CreateBdev {
+                ..
+            } => Code::InternalError,
+            NexusBdevError::DestroyBdev {
+                ..
+            } => Code::InternalError,
+            NexusBdevError::CancelBdev {
+                ..
+            } => Code::InternalError,
         }
     }
 }
@@ -58,6 +121,64 @@ impl From<Bdev> for RpcBdev {
 #[derive(Debug)]
 pub struct BdevSvc;
 
+pub fn bdev_methods() {
+    jsonrpc_register("bdev_create", |args: BdevUri| {
+        async move { bdev_create(&args.uri).await }.boxed_local()
+    });
+
+    jsonrpc_register("bdev_destroy", |args: BdevUri| {
+        async move { bdev_destroy(&args.uri).await }.boxed_local()
+    });
+
+    jsonrpc_register("bdev_share", |args: BdevShareRequest| {
+        let name = args.name.clone();
+        async move {
+            if Bdev::lookup_by_name(&name).is_none() {
+                return Err(JsonRpcError::not_found(&name));
+            }
+
+            if args.proto != "iscsi" && args.proto != "nvmf" {
+                return Err(JsonRpcError::invalid_argument(args.proto));
+            }
+
+            match args.proto.as_str() {
+                "nvmf" => Reactors::master().spawn_local(async move {
+                    let bdev = Bdev::lookup_by_name(&name).unwrap();
+                    bdev.share_nvmf()
+                        .await
+                        .map_err(|e| JsonRpcError::internal(e.to_string()))
+                }),
+
+                "iscsi" => Reactors::master().spawn_local(async move {
+                    let bdev = Bdev::lookup_by_name(&name).unwrap();
+                    bdev.share_iscsi()
+                        .await
+                        .map_err(|e| JsonRpcError::internal(e.to_string()))
+                }),
+                _ => unreachable!(),
+            }
+            .await
+            .map(|share| {
+                let bdev = Bdev::lookup_by_name(&args.name.clone()).unwrap();
+                BdevShareReply {
+                    uri: bdev.share_uri().unwrap_or(share),
+                }
+            })
+        }
+        .boxed_local()
+    });
+
+    jsonrpc_register("bdev_unshare", |args: BdevShareRequest| {
+        async move {
+            let bdev = Bdev::lookup_by_name(&args.name).unwrap();
+            bdev.unshare()
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))
+        }
+        .boxed_local()
+    });
+}
+
 #[tonic::async_trait]
 impl BdevRpc for BdevSvc {
     #[instrument(level = "debug", err)]
@@ -77,26 +198,27 @@ impl BdevRpc for BdevSvc {
         &self,
         request: Request<BdevUri>,
     ) -> Result<Response<CreateReply>, Status> {
-        sync_config(async {
-            let uri = request.into_inner().uri;
-            let bdev = locally! { async move { bdev_create(&uri).await } };
-
-            Ok(Response::new(CreateReply {
-                name: bdev,
-            }))
-        })
-        .await
+        let result: String = jsonrpc::call(
+            "/var/tmp/mayastor",
+            "bdev_create",
+            Some(request.into_inner()),
+        )
+        .await?;
+        Ok(Response::new(CreateReply {
+            name: result,
+        }))
     }
 
     #[instrument(level = "debug", err)]
     async fn destroy(&self, request: Request<BdevUri>) -> GrpcResult<Null> {
-        sync_config(async {
-            let uri = request.into_inner().uri;
-            let _bdev = locally! { async move { bdev_destroy(&uri).await } };
+        jsonrpc::call(
+            "/var/tmp/mayastor",
+            "bdev_destroy",
+            Some(request.into_inner()),
+        )
+        .await?;
 
-            Ok(Response::new(Null {}))
-        })
-        .await
+        Ok(Response::new(Null {}))
     }
 
     #[instrument(level = "debug", err)]
@@ -104,62 +226,27 @@ impl BdevRpc for BdevSvc {
         &self,
         request: Request<BdevShareRequest>,
     ) -> GrpcResult<BdevShareReply> {
-        sync_config(async {
-            let r = request.into_inner();
-            let name = r.name;
-            let proto = r.proto;
+        let uri: String = jsonrpc::call(
+            "/var/tmp/mayastor",
+            "bdev_share",
+            Some(request.into_inner()),
+        )
+        .await?;
 
-            if Bdev::lookup_by_name(&name).is_none() {
-                return Err(Status::not_found(name));
-            }
-
-            if proto != "iscsi" && proto != "nvmf" {
-                return Err(Status::invalid_argument(proto));
-            }
-            let bdev_name = name.clone();
-            match proto.as_str() {
-                "nvmf" => Reactors::master().spawn_local(async move {
-                    let bdev = Bdev::lookup_by_name(&bdev_name).unwrap();
-                    bdev.share_nvmf()
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))
-                }),
-
-                "iscsi" => Reactors::master().spawn_local(async move {
-                    let bdev = Bdev::lookup_by_name(&bdev_name).unwrap();
-                    bdev.share_iscsi()
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))
-                }),
-
-                _ => unreachable!(),
-            }
-            .await
-            .map(|share| {
-                let bdev = Bdev::lookup_by_name(&name).unwrap();
-                Response::new(BdevShareReply {
-                    uri: bdev.share_uri().unwrap_or(share),
-                })
-            })
-        })
-        .await
+        Ok(Response::new(BdevShareReply {
+            uri,
+        }))
     }
 
     #[instrument(level = "debug", err)]
     async fn unshare(&self, request: Request<CreateReply>) -> GrpcResult<Null> {
-        sync_config(async {
-            let name = request.into_inner().name;
-            let hdl = Reactors::master().spawn_local(async move {
-                let bdev = Bdev::lookup_by_name(&name).unwrap();
-                let _ = bdev
-                    .unshare()
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()));
-            });
+        jsonrpc::call(
+            "/var/tmp/mayastor",
+            "bdev_unshare",
+            Some(request.into_inner()),
+        )
+        .await?;
 
-            hdl.await;
-            Ok(Response::new(Null {}))
-        })
-        .await
+        Ok(Response::new(Null {}))
     }
 }

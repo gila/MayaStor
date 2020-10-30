@@ -190,13 +190,6 @@ impl LocalExecutor {
         while let Some(r) = self.local_queue.pop_front() {
             r.run();
         }
-        // self.local_queue
-        //     .queue
-        //     .borrow_mut()
-        //     .iter_mut()
-        //     .for_each(|f| {
-        //         let _ = f.run();
-        //     })
     }
 }
 

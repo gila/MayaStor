@@ -6,16 +6,15 @@ use mayastor::{
     core::{MayastorCliArgs, MayastorEnvironment, Reactors},
     grpc,
     logger,
-    subsys,
 };
+
 use std::path::Path;
 use structopt::StructOpt;
 mayastor::CPS_INIT!();
 use smol::{future, io, net, prelude::*, LocalExecutor, Unblock};
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = MayastorCliArgs::from_args();
-
-    let local_ex = LocalExecutor::new();
 
     // setup our logger first if -L is passed, raise the log level
     // automatically. trace maps to debug at FFI level. If RUST_LOG is
@@ -51,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ms = MayastorEnvironment::new(args).init();
     let master = Reactors::master();
+    crate::grpc::bdev_grpc::bdev_methods();
     master.send_future(async { info!("Mayastor started {} ...", '\u{1F680}') });
     master
         .spawn_local(async_compat::Compat::new(grpc::MayastorGrpcServer::run(

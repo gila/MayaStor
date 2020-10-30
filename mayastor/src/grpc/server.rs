@@ -5,6 +5,7 @@ use crate::grpc::{
     json_grpc::JsonRpcSvc,
     mayastor_grpc::MayastorSvc,
 };
+
 use rpc::mayastor::{
     bdev_rpc_server::BdevRpcServer,
     json_rpc_server::JsonRpcServer,
@@ -19,13 +20,15 @@ impl MayastorGrpcServer {
         rpc_addr: String,
     ) -> Result<(), ()> {
         info!("gRPC server configured at address {}", endpoint);
-        let svc = Server::builder()
-            .add_service(MayastorRpcServer::new(MayastorSvc))
-            .add_service(BdevRpcServer::new(BdevSvc {}))
-            .add_service(JsonRpcServer::new(JsonRpcSvc {
-                rpc_addr,
-            }))
-            .serve(endpoint);
+        let svc = async_compat::Compat::new(
+            Server::builder()
+                .add_service(MayastorRpcServer::new(MayastorSvc))
+                .add_service(BdevRpcServer::new(BdevSvc))
+                .add_service(JsonRpcServer::new(JsonRpcSvc {
+                    rpc_addr,
+                }))
+                .serve(endpoint),
+        );
 
         match svc.await {
             Ok(_) => Ok(()),

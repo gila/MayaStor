@@ -759,8 +759,6 @@ impl MayastorEnvironment {
         F: FnOnce() + 'static,
     {
         type FutureResult = Result<(), ()>;
-        let grpc_endpoint = self.grpc_endpoint;
-        let rpc_addr = self.rpc_addr.clone();
         let ms = self.init();
 
         let mut rt = Builder::new()
@@ -775,12 +773,6 @@ impl MayastorEnvironment {
             let mut futures: Vec<
                 Pin<Box<dyn future::Future<Output = FutureResult>>>,
             > = Vec::new();
-            if let Some(grpc_endpoint) = grpc_endpoint {
-                futures.push(Box::pin(grpc::MayastorGrpcServer::run(
-                    grpc_endpoint,
-                    rpc_addr,
-                )));
-            }
             futures.push(Box::pin(subsys::Registration::run()));
             futures.push(Box::pin(master));
             let _out = future::try_join_all(futures).await;

@@ -337,37 +337,6 @@ impl Reactor {
         R: 'static,
     {
         Reactors::master().ex.loop_on(future)
-        // let _thread = Mthread::current();
-        // Mthread::get_init().enter();
-        // let schedule = |t| QUEUE.with(|(s, _)| s.send(t).unwrap());
-        // let (runnable, task) = async_task::spawn_local(future, schedule);
-        //
-        // let waker = runnable.waker();
-        // let cx = &mut Context::from_waker(&waker);
-        //
-        // pin_utils::pin_mut!(task);
-        // runnable.schedule();
-        // let reactor = Reactors::master();
-        //
-        // loop {
-        //     match task.as_mut().poll(cx) {
-        //         Poll::Ready(output) => {
-        //             Mthread::get_init().exit();
-        //             _thread.map(|t| {
-        //                 debug!(
-        //                     "restoring thread from {:?} to {:?}",
-        //                     Mthread::current(),
-        //                     _thread
-        //                 );
-        //                 t.enter()
-        //             });
-        //             return Some(output);
-        //         }
-        //         Poll::Pending => {
-        //             reactor.poll_once();
-        //         }
-        //     };
-        // }
     }
 
     /// set the state of this reactor

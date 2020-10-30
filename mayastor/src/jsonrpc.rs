@@ -93,6 +93,22 @@ impl JsonRpcError {
     pub fn json_code(&self) -> i32 {
         self.code.into()
     }
+
+    pub fn invalid_argument(
+        message: impl Into<String> + fmt::Display,
+    ) -> JsonRpcError {
+        Self::new(Code::InvalidParams, message)
+    }
+
+    pub fn not_found(
+        message: impl Into<String> + fmt::Display,
+    ) -> JsonRpcError {
+        Self::new(Code::NotFound, message)
+    }
+
+    pub fn internal(message: impl Into<String> + fmt::Display) -> JsonRpcError {
+        Self::new(Code::InternalError, message)
+    }
 }
 
 impl RpcErrorCode for JsonRpcError {
