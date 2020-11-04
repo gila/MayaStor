@@ -12,6 +12,7 @@ use nix::errno::Errno;
 
 use spdk_sys::{
     spdk_bdev,
+    spdk_bdev_desc,
     spdk_bdev_first,
     spdk_bdev_get_aliases,
     spdk_bdev_get_block_size,
@@ -22,23 +23,33 @@ use spdk_sys::{
     spdk_bdev_get_num_blocks,
     spdk_bdev_get_product_name,
     spdk_bdev_get_uuid,
+    spdk_bdev_io,
     spdk_bdev_io_stat,
     spdk_bdev_io_type_supported,
     spdk_bdev_next,
     spdk_bdev_open,
+    spdk_bdev_reset,
+    spdk_io_channel,
     spdk_uuid_generate,
 };
 
 use crate::{
-    bdev::nexus::instances,
+    bdev::{
+        nexus::{instances, nexus_channel::DREvent},
+        nexus_lookup,
+        ChildState,
+    },
     core::{
         share::{Protocol, Share},
         uuid::Uuid,
         CoreError,
         CoreError::{ShareIscsi, ShareNvmf},
         Descriptor,
+        IoChannel,
+        Reactor,
+        Reactors,
     },
-    ffihelper::{cb_arg, AsStr},
+    ffihelper::{cb_arg, pair, AsStr},
     subsys::NvmfSubsystem,
     target::{iscsi, nvmf, Side},
 };
@@ -169,9 +180,14 @@ impl Bdev {
                 // here in one blow to avoid unneeded lookups
                 if b.bdev.as_ref().unwrap().name() == bdev.name() {
                     info!("hot remove {} from {}", b.name, b.parent);
-                    b.close();
+                    b.set_state(ChildState::Removing);
+                    let nexus_name = b.parent.clone();
+                    Reactor::block_on(async move {
+                        let n = nexus_lookup(&nexus_name).unwrap();
+                        n.reconfigure(DREvent::ChildRemove).await;
+                    });
                 }
-            })
+            });
         });
     }
 
@@ -393,7 +409,6 @@ impl Bdev {
             unsafe { Box::from_raw(sender_ptr as *mut oneshot::Sender<i32>) };
         sender.send(errno).expect("stat_cb receiver is gone");
     }
-
     /// Get bdev stats or errno value in case of an error.
     pub async fn stats(&self) -> Result<BdevStats, i32> {
         let mut stat: spdk_bdev_io_stat = Default::default();
@@ -430,6 +445,32 @@ impl Bdev {
             None
         } else {
             Some(Bdev::from(bdev))
+        }
+    }
+
+    pub async fn reset(
+        &self,
+        descriptor: *mut spdk_bdev_desc,
+        channel: *mut spdk_io_channel,
+    ) {
+        let (s, r) = pair::<bool>();
+
+        extern "C" fn reset_cb(
+            io: *mut spdk_bdev_io,
+            success: bool,
+            arg: *mut c_void,
+        ) {
+            let sender =
+                unsafe { Box::from_raw(arg as *mut oneshot::Sender<bool>) };
+            sender.send(success).expect("reset handler gone");
+        }
+
+        unsafe {
+            if spdk_bdev_reset(descriptor, channel, Some(reset_cb), cb_arg(s))
+                != 0
+            {
+                error!("failed to submit reset bdev!");
+            }
         }
     }
 }

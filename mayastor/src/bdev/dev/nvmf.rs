@@ -9,8 +9,6 @@ use std::{
 use async_trait::async_trait;
 use futures::channel::oneshot;
 use snafu::ResultExt;
-use url::Url;
-
 use spdk_sys::{
     self,
     bdev_nvme_create,
@@ -18,6 +16,8 @@ use spdk_sys::{
     spdk_nvme_host_id,
     spdk_nvme_transport_id,
 };
+use tracing::instrument;
+use url::Url;
 
 use crate::{
     bdev::{util::uri, CreateDestroy, GetName},
@@ -137,6 +137,7 @@ impl CreateDestroy for Nvmf {
     type Error = NexusBdevError;
 
     /// Create an NVMF bdev
+    #[instrument(err)]
     async fn create(&self) -> Result<String, Self::Error> {
         if Bdev::lookup_by_name(&self.get_name()).is_some() {
             return Err(NexusBdevError::BdevExists {
@@ -212,6 +213,7 @@ impl CreateDestroy for Nvmf {
     }
 
     /// Destroy the given NVMF bdev
+    #[instrument(err)]
     async fn destroy(self: Box<Self>) -> Result<(), Self::Error> {
         match Bdev::lookup_by_name(&self.get_name()) {
             Some(_) => {

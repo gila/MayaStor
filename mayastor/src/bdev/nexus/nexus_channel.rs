@@ -13,7 +13,7 @@ use spdk_sys::{
 
 use crate::{
     bdev::{nexus::nexus_child::ChildState, Nexus},
-    core::BdevHandle,
+    core::{BdevHandle, Reactor, Reactors},
 };
 
 /// io channel, per core
@@ -176,8 +176,8 @@ impl NexusChannel {
     pub extern "C" fn reconfigure(device: *mut c_void, event: &DREvent) {
         match event {
             DREvent::ChildOffline
-            | DREvent::ChildOnline
             | DREvent::ChildRemove
+            | DREvent::ChildOnline
             | DREvent::ChildFault
             | DREvent::ChildRebuild
             | DREvent::ChildStatusSync => unsafe {
@@ -190,7 +190,6 @@ impl NexusChannel {
             },
         }
     }
-
     /// a generic callback for signaling that all cores have reconfigured
     pub extern "C" fn reconfigure_completed(
         ch_iter: *mut spdk_io_channel_iter,

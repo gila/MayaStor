@@ -26,6 +26,7 @@ impl From<ChildState> for rpc::ChildState {
                 Reason::OutOfSync => rpc::ChildState::ChildDegraded,
                 _ => rpc::ChildState::ChildFaulted,
             },
+            ChildState::Removing => rpc::ChildState::ChildFaulted,
         }
     }
 }

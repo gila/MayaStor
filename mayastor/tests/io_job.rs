@@ -1,5 +1,5 @@
 pub mod common;
-use common::{Builder as ComposeBuilder, MayastorTest, RpcHandle};
+use common::{get_mayastor_test, Builder as ComposeBuilder, RpcHandle};
 use mayastor::{
     bdev::{nexus_create, nexus_lookup},
     core::{Bdev, Builder, JobQueue, MayastorCliArgs},
@@ -9,11 +9,7 @@ use pin_utils::core_reexport::time::Duration;
 use rpc::mayastor::{BdevShareRequest, BdevUri};
 use std::sync::Arc;
 
-async fn create_nexus(
-    mut hdls: Vec<RpcHandle>,
-    queue: Arc<JobQueue>,
-    ms: &MayastorTest<'static>,
-) {
+async fn create_nexus(mut hdls: Vec<RpcHandle>, queue: Arc<JobQueue>) {
     for h in &mut hdls {
         h.bdev
             .create(BdevUri {
@@ -30,7 +26,7 @@ async fn create_nexus(
             .unwrap();
     }
 
-    ms.send(async move {
+    get_mayastor_test().send(async move {
         nexus_create(
             "nexus0",
             1024 * 1024 * 50,
@@ -58,8 +54,8 @@ async fn create_nexus(
 
 #[tokio::test]
 async fn io_driver() {
-    let ms = MayastorTest::new(MayastorCliArgs::default());
     let queue = Arc::new(JobQueue::new());
+    let ms = get_mayastor_test();
 
     let test = ComposeBuilder::new()
         .name("cargo-test")
@@ -73,11 +69,9 @@ async fn io_driver() {
 
     // get the handles if needed, to invoke methods to the containers
     let hdls = test.grpc_handles().await.unwrap();
-    create_nexus(hdls.clone(), queue.clone(), &ms).await;
+    create_nexus(hdls.clone(), queue.clone()).await;
 
     // create and share a bdev on each container
-    tokio::time::delay_for(Duration::from_secs(5)).await;
-    queue.send_reset("nexus0");
     tokio::time::delay_for(Duration::from_secs(5)).await;
 
     ms.spawn(async move {
@@ -88,12 +82,14 @@ async fn io_driver() {
     .await;
 
     ms.spawn(async move {
-        bdev_destroy(&format!(
-            "nvmf://{}:8420/nqn.2019-05.io.openebs:disk0",
-            hdls[0].endpoint.ip()
-        ))
-        .await
-        .unwrap();
+        let nexus = nexus_lookup("nexus0").unwrap();
+        nexus
+            .remove_child(&format!(
+                "nvmf://{}:8420/nqn.2019-05.io.openebs:disk0",
+                hdls[0].endpoint.ip()
+            ))
+            .await
+            .unwrap();
     })
     .await;
 

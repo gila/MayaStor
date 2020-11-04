@@ -229,7 +229,6 @@ impl Nexus {
             None => return Ok(()),
             Some(val) => val,
         };
-
         self.children[idx].close();
         assert_eq!(self.children[idx].state(), ChildState::Closed);
 
@@ -239,6 +238,7 @@ impl Nexus {
         // Update child status to remove this child
         NexusChild::save_state_change();
         self.reconfigure(DREvent::ChildRemove).await;
+        self.children[idx].reset().await;
 
         let result = child.destroy().await.context(DestroyChild {
             name: self.name.clone(),

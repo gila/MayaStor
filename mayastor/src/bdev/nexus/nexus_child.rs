@@ -4,7 +4,11 @@ use nix::errno::Errno;
 use serde::{export::Formatter, Serialize};
 use snafu::{ResultExt, Snafu};
 
-use spdk_sys::{spdk_bdev_module_release_bdev, spdk_io_channel};
+use spdk_sys::{
+    spdk_bdev_get_io_channel,
+    spdk_bdev_module_release_bdev,
+    spdk_io_channel,
+};
 
 use crate::{
     bdev::{
@@ -14,7 +18,7 @@ use crate::{
         },
         NexusErrStore,
     },
-    core::{Bdev, BdevHandle, CoreError, Descriptor},
+    core::{Bdev, BdevHandle, CoreError, Descriptor, Reactor, Reactors},
     nexus_uri::{bdev_destroy, NexusBdevError},
     rebuild::{ClientOperations, RebuildJob},
     subsys::Config,
@@ -94,6 +98,7 @@ pub enum ChildState {
     Closed,
     /// the child is faulted
     Faulted(Reason),
+    Removing,
 }
 
 impl Display for ChildState {
@@ -104,6 +109,7 @@ impl Display for ChildState {
             Self::ConfigInvalid => write!(f, "Config parameters are invalid"),
             Self::Open => write!(f, "Child is open"),
             Self::Closed => write!(f, "Closed"),
+            Self::Removing => write!(f, "Scheduled for removal"),
         }
     }
 }
@@ -218,6 +224,7 @@ impl NexusChild {
             },
         )?);
 
+        self.ch = desc.get_channel().unwrap().as_ptr();
         self.desc = Some(desc);
 
         let cfg = Config::get();
@@ -333,11 +340,19 @@ impl NexusChild {
         }
     }
 
+    pub(crate) async fn reset(&self) {
+        self.bdev
+            .as_ref()
+            .unwrap()
+            .reset(self.desc.as_ref().unwrap().as_ptr(), self.ch)
+            .await;
+    }
+
     /// destroy the child bdev
     pub(crate) async fn destroy(&mut self) -> Result<(), NexusBdevError> {
         trace!("destroying child {:?}", self);
         assert_eq!(self.state(), ChildState::Closed);
-        if let Some(_bdev) = &self.bdev {
+        if let Some(bdev) = &self.bdev {
             bdev_destroy(&self.name).await
         } else {
             warn!("Destroy child without bdev");
