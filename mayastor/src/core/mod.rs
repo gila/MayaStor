@@ -16,7 +16,9 @@ pub use env::{
     MayastorEnvironment,
     GLOBAL_RC,
 };
+
 pub use handle::BdevHandle;
+pub use io_driver::{Builder, Job, JobQueue};
 pub use reactor::{Reactor, ReactorState, Reactors, REACTOR_LIST};
 pub use share::{Protocol, Share};
 pub use thread::Mthread;
@@ -28,6 +30,7 @@ mod descriptor;
 mod dma;
 mod env;
 mod handle;
+mod io_driver;
 mod reactor;
 mod share;
 pub(crate) mod thread;
