@@ -590,6 +590,7 @@ impl ComposeTest {
 
 /// Mayastor test structure that simplifies sending futures. Mayastor has
 /// its own reactor, which is not tokio based, so we need to handle properly
+#[derive(Debug)]
 pub struct MayastorTest<'a> {
     reactor: &'a Reactor,
     thdl: Option<std::thread::JoinHandle<()>>,
