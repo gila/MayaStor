@@ -59,14 +59,14 @@ impl Mthread {
     /// Avoid any blocking calls as it will block the whole reactor. Also, avoid
     /// long-running functions. In general if you follow the nodejs event loop
     /// model, you should be good.
-    pub fn with<F: FnOnce()>(self, f: F) -> Self {
+    pub fn with<T, F: FnOnce() -> T>(self, f: F) -> T {
         let _th = Self::current();
         self.enter();
-        f();
+        let out = f();
         if let Some(t) = _th {
             t.enter();
         }
-        self
+        out
     }
 
     #[inline]

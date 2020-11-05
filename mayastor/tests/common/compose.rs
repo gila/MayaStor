@@ -211,7 +211,7 @@ type ContainerName = String;
 /// container ID
 type ContainerId = String;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ComposeTest {
     /// used as the network name
     name: String,
@@ -565,6 +565,26 @@ impl ComposeTest {
         }
 
         Ok(handles)
+    }
+
+    pub fn down(&self) {
+        if self.clean {
+            self.containers.keys().for_each(|c| {
+                std::process::Command::new("docker")
+                    .args(&["stop", c])
+                    .output()
+                    .unwrap();
+                std::process::Command::new("docker")
+                    .args(&["rm", c])
+                    .output()
+                    .unwrap();
+            });
+
+            std::process::Command::new("docker")
+                .args(&["network", "rm", &self.name])
+                .output()
+                .unwrap();
+        }
     }
 }
 

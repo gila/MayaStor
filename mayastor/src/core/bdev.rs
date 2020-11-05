@@ -180,12 +180,7 @@ impl Bdev {
                 // here in one blow to avoid unneeded lookups
                 if b.bdev.as_ref().unwrap().name() == bdev.name() {
                     info!("hot remove {} from {}", b.name, b.parent);
-                    b.set_state(ChildState::Removing);
-                    let nexus_name = b.parent.clone();
-                    Reactor::block_on(async move {
-                        let n = nexus_lookup(&nexus_name).unwrap();
-                        n.reconfigure(DREvent::ChildRemove).await;
-                    });
+                    b.close();
                 }
             });
         });

@@ -1,12 +1,9 @@
 //! helper routines to drive IO to the nexus for testing purposes
-use std::{
-    ptr::NonNull,
-    sync::{Arc, Mutex},
-    task::{Context, Poll},
-};
+use futures::channel::oneshot;
+use rand::Rng;
+use std::{ptr::NonNull, sync::Mutex};
 
 use spdk_sys::{
-    spdk_bdev_abort,
     spdk_bdev_free_io,
     spdk_bdev_read,
     spdk_bdev_reset,
@@ -14,8 +11,8 @@ use spdk_sys::{
 };
 
 use crate::{
-    bdev::nexus::nexus_io::Bio,
-    core::{Bdev, Descriptor, DmaBuf, IoChannel},
+    core::{Bdev, BdevStats, Cores, Descriptor, DmaBuf, IoChannel, Mthread},
+    ffihelper::pair,
     nexus_uri::bdev_create,
 };
 
@@ -64,12 +61,6 @@ impl Io {
         if self.job().request_reset {
             self.job().request_reset = false;
             self.reset();
-            return;
-        }
-
-        if self.job().request_abort {
-            self.job().request_abort = false;
-            self.abort();
             return;
         }
 
@@ -156,35 +147,6 @@ impl Io {
             }
         }
     }
-
-    pub fn abort(&mut self) {
-        extern "C" fn abort_done(
-            bdev_io: *mut spdk_sys::spdk_bdev_io,
-            success: bool,
-            arg: *mut std::ffi::c_void,
-        ) {
-            dbg!(success);
-            unsafe { spdk_bdev_free_io(bdev_io) };
-        }
-
-        unsafe {
-            if spdk_bdev_abort(
-                self.job.as_ref().desc.as_ptr(),
-                self.job.as_ref().ch.as_ref().unwrap().as_ptr(),
-                self as *const _ as *mut _,
-                Some(abort_done),
-                self as *const _ as *mut _,
-            ) == 0
-            {
-                self.job.as_mut().n_inflight += 1;
-            } else {
-                eprintln!(
-                    "failed to submit abort IO to {}",
-                    self.job.as_ref().bdev.name()
-                );
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -211,17 +173,18 @@ pub struct Job {
     n_io: u64,
     /// number of IO's currently inflight
     n_inflight: u32,
-    /// generate random number between 0 and num_block
-    //    rng: rand::rngs::ThreadRng,
+    ///generate random number between 0 and num_block
+    rng: rand::rngs::ThreadRng,
     /// drain the job which means that we wait for all pending IO to complete
     /// and stop the run
     drain: bool,
-    stopped: bool,
-    /// number of seconds we are running
-    period: u64,
-    ///
+    /// channels used to signal completion
+    s: Option<oneshot::Sender<bool>>,
+    r: Option<oneshot::Receiver<bool>>,
+    /// issue a reset to the bdev
     request_reset: bool,
-    request_abort: bool,
+    core: u32,
+    thread: Option<Mthread>,
 }
 
 impl Job {
@@ -233,19 +196,19 @@ impl Job {
         let ioq: &mut Io = unsafe { &mut *arg.cast() };
         let job = unsafe { ioq.job.as_mut() };
 
-        // if !success {
-        //     let bio = Bio::from(bdev_io);
-        //     eprintln!("{:#?}", bio);
-        // }
+        if !success {
+            error!("{}: {:#?}", job.thread.as_ref().unwrap().name(), bdev_io);
+        }
 
+        assert_eq!(Cores::current(), job.core);
         job.n_io += 1;
         job.n_inflight -= 1;
 
         unsafe { spdk_bdev_free_io(bdev_io) }
 
         if job.n_inflight == 0 {
-            job.stopped = true;
-            unsafe { Box::from_raw(ioq.job.as_ptr()) };
+            trace!("{} fully drained", job.thread.as_ref().unwrap().name());
+            job.s.take().unwrap().send(true).unwrap();
             return;
         }
 
@@ -253,24 +216,31 @@ impl Job {
             return;
         }
 
-        //let offset = (job.rng.gen::<u64>() % job.io_size) * job.io_blocks;
-        ioq.next(0);
+        let offset = (job.rng.gen::<u64>() % job.io_size) * job.io_blocks;
+        ioq.next(offset);
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self) -> oneshot::Receiver<bool> {
         self.drain = true;
+        self.r.take().expect("double shut down for job")
     }
 
     fn as_ptr(&self) -> *mut Job {
         self as *const _ as *mut _
     }
     /// start the job that will dispatch an IO up to the provided queue depth
-    fn start(mut self) -> NonNull<Job> {
-        self.ch = self.desc.get_channel();
-        let mut boxed = Box::new(self);
-        let ptr = boxed.as_ptr();
-        boxed.queue.iter_mut().for_each(|q| q.run(ptr));
-        unsafe { NonNull::new_unchecked(Box::into_raw(boxed)) }
+    fn start(mut self) -> Box<Job> {
+        let thread =
+            Mthread::new(format!("job_{}", self.bdev.name()), self.core)
+                .unwrap();
+        thread.with(|| {
+            self.ch = self.desc.get_channel();
+            let mut boxed = Box::new(self);
+            let ptr = boxed.as_ptr();
+            boxed.queue.iter_mut().for_each(|q| q.run(ptr));
+            boxed.thread = Mthread::current();
+            boxed
+        })
     }
 }
 
@@ -284,7 +254,9 @@ pub struct Builder {
     io_size: u64,
     /// type of workload to generate
     iot: IoType,
+    /// existing bdev to use instead of creating one
     bdev: Option<Bdev>,
+    core: u32,
 }
 
 impl Builder {
@@ -292,28 +264,38 @@ impl Builder {
         Self::default()
     }
 
+    /// create a bdev using the given URI
     pub fn uri(mut self, uri: &str) -> Self {
         self.uri = String::from(uri);
         self
     }
 
+    /// set the queue depth of the job
     pub fn qd(mut self, qd: u64) -> Self {
         self.qd = qd;
         self
     }
 
+    /// io size per IO for the job
     pub fn io_size(mut self, io_size: u64) -> Self {
         self.io_size = io_size;
         self
     }
 
+    /// issue read or write requests
     pub fn rw(mut self, iot: IoType) -> Self {
         self.iot = iot;
         self
     }
 
+    /// use the given bdev instead of the URI to create the job
     pub fn bdev(mut self, bdev: Bdev) -> Self {
         self.bdev = Some(bdev);
+        self
+    }
+
+    pub fn core(mut self, core: u32) -> Self {
+        self.core = core;
         self
     }
 
@@ -344,8 +326,9 @@ impl Builder {
                 job: NonNull::dangling(),
             });
         });
-
+        let (s, r) = pair::<bool>();
         Job {
+            core: self.core,
             bdev,
             desc,
             ch: None,
@@ -357,18 +340,19 @@ impl Builder {
             io_blocks,
             n_io: 0,
             n_inflight: 0,
-            //rng: Default::default(),
+            rng: Default::default(),
             drain: false,
-            period: 0,
-            stopped: false,
+            s: Some(s),
+            r: Some(r),
             request_reset: false,
-            request_abort: false,
+            thread: None,
         }
     }
 }
 
 pub struct JobQueue {
-    inner: Mutex<Vec<NonNull<Job>>>,
+    #[allow(clippy::vec_box)]
+    inner: Mutex<Vec<Box<Job>>>,
 }
 
 impl Default for JobQueue {
@@ -384,33 +368,39 @@ impl JobQueue {
         }
     }
 
+    fn lookup(&self, name: &str) -> Option<Box<Job>> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(index) =
+            inner.iter().position(|job| job.bdev.name() == name)
+        {
+            Some(inner.remove(index))
+        } else {
+            None
+        }
+    }
+
     pub fn start(&self, job: Job) {
         self.inner.lock().unwrap().push(job.start());
     }
 
-    pub fn stop(&self, bdevname: &str) -> bool {
-        let mut drained = false;
-        self.inner.lock().unwrap().iter_mut().for_each(|j| {
-            if unsafe { j.as_ref().bdev.name() } == bdevname {
-                unsafe { j.as_mut().drain = true };
-                drained = true;
-            }
-        });
-
-        drained
+    pub async fn stop(&self, bdevname: &str) {
+        if let Some(mut job) = self.lookup(bdevname) {
+            job.stop().await.unwrap();
+            job.thread.unwrap().with(|| drop(job));
+        }
     }
 
-    pub fn send_reset(&self, bdevname: &str) {
-        self.inner.lock().unwrap().iter_mut().for_each(|j| {
-            let job = unsafe { j.as_mut() };
-            job.request_reset = true;
-        });
+    pub async fn stop_all(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        while let Some(mut job) = inner.pop() {
+            job.stop().await.unwrap();
+            job.thread.unwrap().with(|| drop(job));
+        }
     }
 
-    pub fn send_abort(&self, bdevname: &str) {
+    pub fn send_reset(&self) {
         self.inner.lock().unwrap().iter_mut().for_each(|j| {
-            let job = unsafe { j.as_mut() };
-            job.request_abort = true;
+            j.request_reset = true;
         });
     }
 }

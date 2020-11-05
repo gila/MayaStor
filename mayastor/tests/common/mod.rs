@@ -27,17 +27,6 @@ pub mod ms_exec;
 pub use compose::{Builder, ComposeTest, MayastorTest, RpcHandle};
 use mayastor::core::MayastorCliArgs;
 
-pub static MS: OnceCell<MayastorTest> = OnceCell::new();
-
-pub fn get_mayastor_test() -> &'static MayastorTest<'static> {
-    let ms = MS.get_or_init(|| {
-        MayastorTest::new(MayastorCliArgs {
-            reactor_mask: "0x2".into(),
-            ..Default::default()
-        })
-    });
-    &ms
-}
 /// call F cnt times, and sleep for a duration between each invocation
 pub fn retry<F, T, E>(mut cnt: u32, timeout: Duration, mut f: F) -> T
 where
