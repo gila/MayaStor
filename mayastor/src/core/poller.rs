@@ -12,25 +12,29 @@ use spdk_sys::{
     spdk_poller_resume,
     spdk_poller_unregister,
 };
+use std::fmt::Debug;
 
 /// structure holding our function and context
-struct PollCtx<'a>(Box<dyn FnMut() -> i32 + 'a>);
+struct PollCtx<'a, T: Send + std::fmt::Debug> {
+    poll_fn: Box<dyn FnMut(&T) -> i32 + 'a>,
+    poll_args: T,
+}
 
 /// indirection to avoid raw pointers at upper layers
 #[inline(always)]
-extern "C" fn _cb(ctx: *mut c_void) -> i32 {
-    let poll = unsafe { &mut *(ctx as *mut PollCtx) };
-    (poll.0)()
+extern "C" fn _cb<T: Send + Debug>(ctx: *mut c_void) -> i32 {
+    let poll = unsafe { &mut *(ctx as *mut PollCtx<T>) };
+    (poll.poll_fn)(&poll.poll_args)
 }
 
 /// Poller structure that allows us to pause, stop, resume periodic tasks
-pub struct Poller<'a> {
+pub struct Poller<'a, T: Send + Debug> {
     inner: NonNull<spdk_poller>,
-    ctx: NonNull<PollCtx<'a>>,
+    ctx: NonNull<PollCtx<'a, T>>,
     stopped: bool,
 }
 
-impl<'a> Poller<'a> {
+impl<'a, T: Send + Debug> Poller<'a, T> {
     /// stop the given poller and take ownership of the passed in closure or
     /// function
     pub fn stop(mut self) {
@@ -56,7 +60,7 @@ impl<'a> Poller<'a> {
     }
 }
 
-impl<'a> Drop for Poller<'a> {
+impl<'a, T: Send + Debug> Drop for Poller<'a, T> {
     fn drop(&mut self) {
         if !self.stopped {
             unsafe {
@@ -68,19 +72,20 @@ impl<'a> Drop for Poller<'a> {
 }
 
 /// builder type to create a new poller
-pub struct Builder<'a> {
+pub struct Builder<'a, T> {
     name: Option<CString>,
     interval: std::time::Duration,
-    poll_fn: Option<Box<dyn FnMut() -> i32 + 'a>>,
+    poll_fn: Option<Box<dyn FnMut(&T) -> i32 + 'a>>,
+    ctx: Option<T>,
 }
 
-impl<'a> Default for Builder<'a> {
+impl<'a, T: Send + Debug> Default for Builder<'a, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a> Builder<'a> {
+impl<'a, T: Send + Debug> Builder<'a, T> {
     /// create a new nameless poller that runs every time the thread the poller
     /// is created on is polled
     pub fn new() -> Self {
@@ -88,6 +93,7 @@ impl<'a> Builder<'a> {
             name: None,
             interval: Duration::from_micros(0),
             poll_fn: None,
+            ctx: None,
         }
     }
 
@@ -107,31 +113,42 @@ impl<'a> Builder<'a> {
     }
 
     /// set the function for this poller
-    pub fn with_poll_fn(mut self, poll_fn: impl FnMut() -> i32 + 'a) -> Self {
+    pub fn with_poll_fn(mut self, poll_fn: impl FnMut(&T) -> i32 + 'a) -> Self {
         self.poll_fn = Some(Box::new(poll_fn));
         self
     }
 
+    pub fn with_ctx(mut self, ctx: T) -> Self {
+        self.ctx = Some(ctx);
+        self
+    }
+
     /// build a  new poller object
-    pub fn build(mut self) -> Poller<'a> {
+    #[must_use]
+    pub fn build(mut self) -> Poller<'a, T> {
         let poll_fn = self
             .poll_fn
             .take()
             .expect("can not start poller without poll function");
 
-        let ctx = NonNull::new(Box::into_raw(Box::new(PollCtx(poll_fn))))
-            .expect("failed to allocate new poller context");
+        let poll_args = self.ctx.take().expect("a context for the poller must be provided, consider using std::ptr::null otherwise");
+
+        let ctx = NonNull::new(Box::into_raw(Box::new(PollCtx {
+            poll_fn,
+            poll_args,
+        })))
+        .expect("failed to allocate new poller context");
 
         let inner = NonNull::new(unsafe {
             if self.name.is_none() {
                 spdk_poller_register(
-                    Some(_cb),
+                    Some(_cb::<T>),
                     ctx.as_ptr().cast(),
                     self.interval.as_micros() as u64,
                 )
             } else {
                 spdk_poller_register_named(
-                    Some(_cb),
+                    Some(_cb::<T>),
                     ctx.as_ptr().cast(),
                     self.interval.as_micros() as u64,
                     self.name.as_ref().unwrap().as_ptr(),

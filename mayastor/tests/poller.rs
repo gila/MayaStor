@@ -8,6 +8,7 @@ use mayastor::core::{
     MayastorEnvironment,
     Reactors,
 };
+use std::cell::UnsafeCell;
 
 pub mod common;
 
@@ -27,7 +28,8 @@ fn poller() {
     let args = (1, 2);
     let poller = poller::Builder::new()
         .with_interval(0)
-        .with_poll_fn(move || {
+        .with_ctx(args)
+        .with_poll_fn(|args| {
             println!("and a {} and {}", args.0, args.1);
             let mut count = COUNT.load();
             count += 1;
@@ -46,7 +48,8 @@ fn poller() {
     let args = (1, 2);
     let mut poller = poller::Builder::new()
         .with_interval(0)
-        .with_poll_fn(move || {
+        .with_ctx(args)
+        .with_poll_fn(move |_| {
             let count = COUNT.load();
             println!("and a {} and {} (count: {}) ", args.0, args.1, count);
             COUNT.store(count + 1);
@@ -55,7 +58,6 @@ fn poller() {
         .build();
 
     Reactors::master().poll_times(64);
-    // we dropped the poller before we polled, it should not be there anymore.
     assert_eq!(COUNT.load(), 64);
 
     poller.pause();
@@ -72,10 +74,39 @@ fn poller() {
 
     let poller = poller::Builder::new()
         .with_interval(0)
-        .with_poll_fn(|| test_fn(1, 2))
+        .with_ctx(0)
+        .with_poll_fn(|_| test_fn(1, 2))
         .build();
     Reactors::master().poll_times(64);
     drop(poller);
+
+    #[derive(Debug)]
+    struct SomeArgs {
+        f1: UnsafeCell<u64>,
+        f2: u32,
+    }
+
+    let args = SomeArgs {
+        f1: UnsafeCell::new(0),
+        f2: 0,
+    };
+
+    let mut cnt: u32 = 0;
+    let poller = poller::Builder::new()
+        .with_interval(0)
+        .with_ctx(args)
+        .with_poll_fn(move |args| {
+            unsafe {
+                *args.f1.get() += 1;
+                dbg!(*args.f1.get());
+            };
+            cnt += 1;
+            dbg!(cnt);
+            0
+        })
+        .build();
+
+    Reactors::master().poll_times(64);
 
     mayastor_env_stop(0);
 }
