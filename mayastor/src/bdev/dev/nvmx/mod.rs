@@ -3,6 +3,7 @@ mod controller;
 mod device;
 mod handle;
 mod namespace;
+mod qp;
 mod uri;
 mod utils;
 

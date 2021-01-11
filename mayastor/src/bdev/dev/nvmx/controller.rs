@@ -490,6 +490,13 @@ pub(crate) mod transport {
             trid.adrfam = AdressFamily::NvmfAdrfamIpv4 as u32;
             trid.trtype = TransportId::TCP as u32;
 
+            if self.traddr.is_empty()
+                || self.svcid.is_empty()
+                || self.subnqn.is_empty()
+            {
+                panic!("invalid variables")
+            }
+
             unsafe {
                 copy_nonoverlapping(
                     trtype.as_ptr().cast(),

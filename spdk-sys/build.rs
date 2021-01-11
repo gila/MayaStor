@@ -85,6 +85,7 @@ fn main() {
         .whitelist_function("^nvme_cmd_.*")
         .whitelist_function("^nvme_status_.*")
         .whitelist_function("^nvmf_tgt_accept")
+        .whitelist_function("nvme*")
         .blacklist_type("^longfunc")
         .whitelist_var("^NVMF.*")
         .whitelist_var("^SPDK.*")
