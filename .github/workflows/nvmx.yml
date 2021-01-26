@@ -1,13 +1,6 @@
 name: NVMx testing
 on:
   push:
-    branches:
-      - "feature/nvmx"
-  pull_request:
-    branches:
-      - "gila:**"
-      - "mtzaurus:**"
-      - "openebs:**"
 jobs:
   nvmx_test:
     name: run nvmx cargo-tests
