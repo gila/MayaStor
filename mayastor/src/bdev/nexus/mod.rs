@@ -18,7 +18,6 @@ pub mod nexus_bdev_rebuild;
 pub mod nexus_bdev_snapshot;
 mod nexus_channel;
 pub(crate) mod nexus_child;
-pub(crate) mod nexus_child_error_store;
 pub mod nexus_child_status_config;
 mod nexus_config;
 pub mod nexus_fn_table;

@@ -23,6 +23,7 @@ pub use nvme::{GenericStatusCode, NvmeStatus};
 pub use reactor::{Reactor, ReactorState, Reactors, REACTOR_LIST};
 pub use share::{Protocol, Share};
 pub use thread::Mthread;
+pub use bio::{Bio, IoType, IoStatus};
 
 mod bdev;
 mod channel;
@@ -38,6 +39,7 @@ mod reactor;
 mod share;
 pub(crate) mod thread;
 mod uuid;
+mod bio;
 
 #[derive(Debug, Snafu, Clone)]
 #[snafu(visibility = "pub")]

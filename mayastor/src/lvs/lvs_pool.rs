@@ -29,7 +29,9 @@ use spdk_sys::{
 use url::Url;
 
 use crate::{
-    bdev::{nexus::nexus_io::IoType, util::uring, Uri},
+    core::IoType,
+
+    bdev::{util::uring, Uri},
     core::{Bdev, Share, Uuid},
     ffihelper::{cb_arg, pair, AsStr, ErrnoResult, FfiResult, IntoCString},
     lvs::{Error, Lvol, PropName, PropValue},

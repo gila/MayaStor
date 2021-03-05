@@ -11,14 +11,14 @@ rm libspdk.so
 
 ./configure --enable-debug \
 	--target-arch=nehalem \
-	--disable-tests \
+	--enable-tests \
 	--without-isal \
 	--with-iscsi-initiator \
 	--with-crypto \
 	--with-uring \
-	--disable-unit-tests
+	--enable-unit-tests
 
-make -j $(nproc)
+bear -- make -j $(nproc)
 
 # delete things we for sure do not want link
 find . -type f -name 'libspdk_event_nvmf.a' -delete

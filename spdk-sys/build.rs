@@ -68,6 +68,8 @@ fn main() {
         .clang_args(clang_args)
         .header("wrapper.h")
         .rustfmt_bindings(true)
+
+        .whitelist_function("bdev_io_from_ctx")
         .whitelist_function("*.aio.*")
         .whitelist_function("*.crypto_disk.*")
         .whitelist_function("*.iscsi.*")

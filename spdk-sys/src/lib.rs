@@ -13,7 +13,7 @@
     clippy::upper_case_acronyms
 )]
 
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 include!(concat!(env!("OUT_DIR"), "/libspdk.rs"));
 
 pub type LogProto = Option<
@@ -38,7 +38,7 @@ extern "C" {
         format: *const c_char,
         args: *mut __va_list_tag,
     );
-
+    pub fn bdev_io_from_ctx(ctx: *mut c_void) -> *mut spdk_bdev_io;
     pub static mut logfn: LogProto;
 }
 

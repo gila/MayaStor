@@ -17,7 +17,6 @@ use crate::{
             nexus_child_status_config::ChildStatusConfig,
         },
         nexus_lookup,
-        NexusErrStore,
         VerboseError,
     },
     core::{Bdev, BdevHandle, CoreError, Descriptor, Reactor, Reactors},
@@ -144,9 +143,6 @@ pub struct NexusChild {
     /// previous state of the child
     #[serde(skip_serializing)]
     pub prev_state: AtomicCell<ChildState>,
-    /// record of most-recent IO errors
-    #[serde(skip_serializing)]
-    pub(crate) err_store: Option<NexusErrStore>,
     #[serde(skip_serializing)]
     remove_channel: (mpsc::Sender<()>, mpsc::Receiver<()>),
 }
@@ -250,12 +246,6 @@ impl NexusChild {
         )?);
 
         self.desc = Some(desc);
-
-        let cfg = Config::get();
-        if cfg.err_store_opts.enable_err_store {
-            self.err_store =
-                Some(NexusErrStore::new(cfg.err_store_opts.err_store_size));
-        };
 
         self.set_state(ChildState::Open);
 
@@ -469,7 +459,6 @@ impl NexusChild {
             desc: None,
             state: AtomicCell::new(ChildState::Init),
             prev_state: AtomicCell::new(ChildState::Init),
-            err_store: None,
             remove_channel: mpsc::channel(0),
         }
     }

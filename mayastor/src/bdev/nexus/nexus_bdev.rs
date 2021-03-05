@@ -16,7 +16,7 @@ use nix::errno::Errno;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
-
+use crate::ffihelper::FfiResult;
 use spdk_sys::{
     spdk_bdev,
     spdk_bdev_desc,
@@ -47,12 +47,12 @@ use crate::{
                 ReconfigureCtx,
             },
             nexus_child::{ChildError, ChildState, NexusChild},
-            nexus_io::{nvme_admin_opc, Bio, IoStatus, IoType},
+            nexus_io::nvme_admin_opc,
             nexus_label::LabelError,
             nexus_nbd::{NbdDisk, NbdError},
         },
     },
-    core::{Bdev, CoreError, Protocol, Reactor, Share},
+    core::{Bdev, CoreError, Protocol, Reactor, Share, Bio, IoStatus, IoType},
     ffihelper::errno_result_from_i32,
     lvs::Lvol,
     nexus_uri::{bdev_destroy, NexusBdevError},
@@ -61,6 +61,7 @@ use crate::{
     subsys::{Config, NvmfSubsystem},
 };
 use std::ptr::NonNull;
+use crate::bdev::nexus::nexus_io::NioCtx;
 
 /// Obtain the full error chain
 pub trait VerboseError {
@@ -328,8 +329,6 @@ pub struct Nexus {
     pub(crate) share_handle: Option<String>,
     /// enum containing the protocol-specific target used to publish the nexus
     pub nexus_target: Option<NexusTarget>,
-    /// the maximum number of times to attempt to send an IO
-    pub(crate) max_io_attempts: i32,
 }
 
 unsafe impl core::marker::Sync for Nexus {}
@@ -421,7 +420,6 @@ impl Nexus {
             share_handle: None,
             size,
             nexus_target: None,
-            max_io_attempts: cfg.err_store_opts.max_io_attempts,
         });
 
         n.bdev.set_uuid(uuid.map(String::from));
@@ -715,7 +713,7 @@ impl Nexus {
                 pio
             );
 
-            pio.ctx_as_mut_ref().status = IoStatus::Failed;
+            pio.specific::<NioCtx>().status = IoStatus::Failed;
         }
         pio.assess(&mut chio, success);
         // always free the child IO
@@ -725,7 +723,7 @@ impl Nexus {
     /// IO completion for local replica
     pub fn io_completion_local(success: bool, parent_io: *mut c_void) {
         let mut pio = Bio::from(parent_io);
-        let pio_ctx = pio.ctx_as_mut_ref();
+        let pio_ctx = pio.specific::<NioCtx>();
 
         if !success {
             pio_ctx.status = IoStatus::Failed;
@@ -747,7 +745,6 @@ impl Nexus {
             }
         }
     }
-
     /// callback when the IO has buffer associated with itself
     extern "C" fn nexus_get_buf_cb(
         ch: *mut spdk_io_channel,
@@ -763,7 +760,7 @@ impl Nexus {
         let ch = NexusChannel::inner_from_channel(ch);
         let (desc, ch) = ch.readers[ch.previous].io_tuple();
         let ret = Self::readv_impl(io, desc, ch);
-        if ret != 0 {
+        if ret.is_err()  {
             let bio = Bio::from(io);
             let nexus = bio.nexus_as_ref();
             error!("{}: Failed to submit IO {:?}", nexus.name, bio);
@@ -797,19 +794,23 @@ impl Nexus {
             return;
         }
 
-        let (desc, ch) = channels.readers[child.unwrap()].io_tuple();
+        let (desc, ch) = channels.readers[child.expect("BUG child channels are gone")].io_tuple();
 
-        let ret = Self::readv_impl(io.as_ptr(), desc, ch);
-
-        if ret != 0 {
-            error!(
-                "{}: Failed to submit dispatched IO {:p}",
-                io.nexus_as_ref().name,
-                io.as_ptr()
-            );
-
-            io.fail();
-        }
+        Self::readv_impl(io.as_ptr(), desc, ch).unwrap();
+        //
+        //
+        //
+        // };
+        //
+        // if ret != 0 {
+        //     error!(
+        //         "{}: Failed to submit dispatched IO {:p}",
+        //         io.nexus_as_ref().name,
+        //         io.as_ptr()
+        //     );
+        //
+        //     io.fail();
+        // }
     }
 
     /// do the actual read
@@ -818,7 +819,7 @@ impl Nexus {
         pio: *mut spdk_bdev_io,
         desc: *mut spdk_bdev_desc,
         ch: *mut spdk_io_channel,
-    ) -> i32 {
+    ) -> Result<(), Errno> {
         let io = Bio::from(pio);
         let nexus = io.nexus_as_ref();
         unsafe {
@@ -832,7 +833,7 @@ impl Nexus {
                 Some(Self::io_completion),
                 io.as_ptr() as *mut _,
             )
-        }
+        }.to_result(Errno::from_i32)
     }
 
     /// check results after submitting IO, failing if all failed to submit
