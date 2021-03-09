@@ -2,13 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct spdk_bdev_io*
-
-bdev_io_from_ctx(void *ctx)
-{
-	return spdk_bdev_io_from_ctx(ctx);
-}
-
 void
 maya_log(int level, const char *file, const int line, const char *func,
     const char *format, va_list args)

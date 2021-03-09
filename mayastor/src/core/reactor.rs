@@ -452,12 +452,12 @@ impl Reactor {
     /// now
     #[inline]
     pub fn poll_once(&self) {
-        self.receive_futures();
-        self.run_futures();
         self.threads.borrow().iter().for_each(|t| {
             t.poll();
         });
 
+        self.receive_futures();
+        self.run_futures();
         while let Ok(i) = self.incoming.pop() {
             self.threads.borrow_mut().push_back(i);
         }

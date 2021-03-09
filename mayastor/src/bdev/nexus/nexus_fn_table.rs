@@ -17,14 +17,10 @@ use spdk_sys::{
     spdk_json_write_val_raw,
 };
 
-use crate::bdev::nexus::{
-    instances,
-    nexus_bdev::Nexus,
-    nexus_channel::NexusChannel,
-};
+use crate::bdev::nexus::{instances, nexus_bdev::Nexus, nexus_io::NexusBio};
 
-use crate::core::{IoChannel, Bio, IoType, IoStatus};
-use crate::bdev::nexus::nexus_io::NioCtx;
+use crate::core::{IoChannel, Bio, IoType};
+use crate::bdev::nexus::nexus_io::{NioCtx, nexus_submit_io};
 
 static NEXUS_FN_TBL: Lazy<NexusFnTable> = Lazy::new(NexusFnTable::new);
 
@@ -103,21 +99,19 @@ impl NexusFnTable {
     /// callbacks rather than futures and closures for performance reasons.
     /// This function is not called when the IO is re-submitted (see below).
     pub extern "C" fn io_submit(
-        channel: *mut spdk_io_channel,
+        _channel: *mut spdk_io_channel,
         io: *mut spdk_bdev_io,
     ) {
-        dbg!(io);
         // only set the number of IO attempts before the first attempt
-        let mut bio = Bio::from(io);
-        let bio = bio.specific::<NioCtx>();
-        Self::nexus_submit_io(bio);
+        let mut bio = NexusBio::from(io);
+
+        println!("io ptr: {:p}", io);
+        nexus_submit_io(bio);
     }
 
-    fn nexus_submit_io(io: &mut NioCtx) {
-        dbg!(&io);
-        io.complete(IoStatus::Failed);
-
-    }
+    // fn nexus_io::nexus_submit_io(io: &mut NioCtx) {
+    //     io.complete(false);
+    // }
 
     /// Submit an IO to the children at the first or subsequent attempts.
     pub(crate) fn nexus_submit(

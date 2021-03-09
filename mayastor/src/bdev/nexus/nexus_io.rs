@@ -1,30 +1,35 @@
 use std::{
-    fmt::{Debug},
+    fmt::Debug,
 };
-
+use crate::ffihelper::{FfiResult, ErrnoResult};
 use libc::c_void;
 
 use spdk_sys::{
-    spdk_bdev_io_complete,
-    spdk_bdev_io_get_io_channel,
-    bdev_io_from_ctx,
+    spdk_bdev_readv_blocks,
+    spdk_bdev_writev_blocks,
+    spdk_bdev_io,
 };
 
 use crate::{
-    core::Bio,
     bdev::{
+        ChildState,
         nexus::{
             nexus_channel::DrEvent,
         },
         nexus_lookup,
-        ChildState,
         NexusStatus,
         Reason,
     },
-    core::{Bdev, Cores, GenericStatusCode, Mthread, NvmeStatus, IoChannel, Reactors},
+    core::{Bdev, Cores, Mthread},
+    core::Bio,
     nexus_uri::bdev_destroy,
 };
-use crate::core::IoStatus;
+
+use crate::core::{IoStatus, IoType, BdevHandle};
+use crate::bdev::nexus::nexus_channel::{NexusChannel, NexusChannelInner};
+use crate::bdev::Nexus;
+use crate::bdev::nexus::nexus_bdev::NEXUS_PRODUCT_ID;
+use nix::errno::Errno;
 
 macro_rules! offset_of {
     ($container:ty, $field:ident) => (unsafe {
@@ -37,64 +42,232 @@ macro_rules! container_of {
         (($ptr as usize) - offset_of!($container, $field)) as *mut $container
     })
 }
+
+ #[repr(transparent)]
+ pub (crate) struct NexusBio(Bio);
+
+ impl From<*mut c_void>for NexusBio {
+     fn from(ptr: *mut c_void) -> Self {
+         Self(Bio::from(ptr))
+     }
+ }
+
+impl From<*mut spdk_bdev_io>for NexusBio {
+    fn from(ptr: *mut spdk_bdev_io) -> Self {
+        Self(Bio::from(ptr))
+    }
+}
+//type NexusBio = Bio;
 /// NioCtx provides context on a per IO basis
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[repr(C)]
 pub struct NioCtx {
     /// read consistency
     pub(crate) in_flight: u8,
-    /// status of the IO
-    disposition: Disposition,
     /// attempts left
     pub(crate) io_attempts: u8,
     /// number of IOs needed
     io_needed: u8,
-   /// killme
-    pub (crate) status: IoStatus,
+    /// killme
+    pub(crate) status: IoStatus,
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[repr(C)]
 enum Disposition {
-    Complete,
+    Complete(IoStatus),
+    Flying(IoStatus),
     Failed,
 }
 
-impl NioCtx {
-    #[inline]
-    pub fn dec(&mut self) {
-        self.in_flight -= 1;
-        debug_assert!(self.in_flight >= 0);
+pub (crate) fn nexus_submit_io(mut io: NexusBio) {
+
+    io.setup();
+
+    match io.cmd() {
+        IoType::Read => {
+            io.readv().unwrap();
+        }
+        IoType::Write => {
+            io.writev().unwrap();
+        }
+        _  => { panic!("not implemented") }
     }
-
-    pub fn setup(&mut self) {
-
-    }
-
-    fn as_io(&self) -> *mut c_void  {
-       let ptr=  self as *const _ as *mut _;
-        dbg!(ptr);
-        ptr
-       //*self as *const _ as *mut _
-    }
-
-
-    fn disposition() -> Disposition {
-       Disposition::Failed
-    }
-
-    fn bio(&self) -> Bio {
-      let ptr = self as *const _;
-      let bio = container_of!(ptr, spdk_sys::spdk_bdev_io, driver_ctx);
-      let b = Bio::from(bio);
-      dbg!(&b);
-      b
-    }
-
-    pub fn complete(&self, status: IoStatus) {
-        self.bio().fail();
-    }
-
 }
+
+impl NexusBio {
+    unsafe extern "C" fn child_completion(
+        child_io: *mut spdk_bdev_io,
+        success: bool,
+        nexus_io: *mut c_void,
+    ) {
+        let mut nexus_io = NexusBio::from(nexus_io);
+        let child_io = Bio::from(child_io);
+        nexus_io.complete(success);
+        child_io.free();
+    }
+
+    #[inline(always)]
+    fn ctx(&mut self) -> &mut NioCtx {
+       self.0.specific::<NioCtx>()
+    }
+
+
+    #[inline(always)]
+    pub fn setup(&mut self) {
+        let ctx = self.ctx();
+        ctx.status = IoStatus::Success;
+        ctx.in_flight = 0;
+    }
+
+    fn disposition(&mut self) -> Disposition {
+
+        let ctx = self.ctx();
+        if ctx.in_flight == 0  && ctx.status == IoStatus::Success {
+            return Disposition::Complete(IoStatus::Success)
+        }
+
+        if ctx.in_flight == 0 && ctx.status == IoStatus::Failed {
+            return Disposition::Complete(IoStatus::Failed)
+        }
+
+        Disposition::Flying(IoStatus::Pending)
+    }
+
+    #[inline(always)]
+    fn bio_ref(&self) -> Bio {
+        let ptr = self as *const _;
+        let bio = container_of!(ptr, spdk_sys::spdk_bdev_io, driver_ctx);
+        Bio::from(bio)
+    }
+
+    #[inline(always)]
+    fn cmd(&self) -> IoType {
+        self.0.io_type()
+    }
+
+    pub fn complete(&mut self, success: bool) {
+        debug!("completion {:?}", self.0);
+
+        // update counter of in flight IO
+        self.ctx().in_flight -=1;
+
+        // record the state of the IO
+        if !success {
+            self.ctx().status = IoStatus::Failed;
+        }
+
+        match self.disposition() {
+            Disposition::Complete(IoStatus::Success) => {
+                debug!("IO completed inflight is {}", self.ctx().in_flight);
+                self.0.ok();
+            },
+
+            Disposition::Complete(IoStatus::Failed)  => {
+                debug!("IO complete but failed");
+                self.0.fail();
+            },
+
+            Disposition::Flying(IoStatus::Failed) => {
+                debug!("IO failed but IO in-flight {}", self.ctx().in_flight);
+            }
+            Disposition::Flying(_) => {
+                debug!("IO completed but IO in-flight {}", self.ctx().in_flight);
+            }
+            _ => {}
+        }
+    }
+
+    fn inner_channel(&self) -> &mut NexusChannelInner {
+        let ch = self.0.io_channel();
+        NexusChannel::inner_from_channel(ch.as_ptr())
+    }
+
+    fn nexus_name(&self) -> String {
+        self.0.bdev_as_ref().name()
+    }
+
+    fn data_ent_offset(&self) -> u64 {
+        let b = self.0.bdev_as_ref();
+        assert_eq!(b.product_name(), NEXUS_PRODUCT_ID);
+        unsafe { Nexus::from_raw((*b.as_ptr()).ctxt) }.data_ent_offset
+    }
+
+    fn read_channel_at_index(&self, i: usize) -> &BdevHandle {
+        &self.inner_channel().readers[i]
+    }
+
+    fn writers(&self) -> impl Iterator<Item = &BdevHandle> {
+        self.inner_channel().writers.iter()
+    }
+
+    fn readv(&mut self) -> Result<u8, Errno> {
+        let child = self.inner_channel().child_select();
+        if child.is_none() {
+            error!(
+                "no child available to read from {:?}",
+                self.0,
+            );
+            self.0.fail();
+            return Err(Errno::ENODEV);
+        }
+
+        let (desc, ch) = self.read_channel_at_index(child.unwrap()).io_tuple();
+
+        let ret = unsafe {
+            spdk_bdev_readv_blocks(
+                desc,
+                ch,
+                self.0.iovs(),
+                self.0.iov_count(),
+                self.0.offset() + self.data_ent_offset(),
+                self.0.num_blocks(),
+                Some(Self::child_completion),
+                self.0.as_ptr().cast()
+            )
+        };
+
+        if ret == 0 {
+            self.ctx().in_flight += 1;
+            Ok(self.ctx().in_flight)
+        } else {
+            self.ctx().status = IoStatus::Failed;
+            Err(Errno::from_i32(ret.abs()))
+        }
+    }
+
+    fn writev(&mut self) -> Result<(), Errno> {
+        let offset = self.0.offset();
+        let mut in_flight : u8 = 0;
+
+        self.writers().for_each(|h| {
+            let (desc, ch) = h.io_tuple();
+            let ret = unsafe {
+                spdk_bdev_writev_blocks(
+                    desc,
+                    ch,
+                    self.0.iovs(),
+                    self.0.iov_count(),
+                    self.0.offset() + offset,
+                    self.0.num_blocks(),
+                    Some(Self::child_completion),
+                    self.0.as_ptr().cast(),
+                )
+            };
+
+            if ret == 0 {
+                in_flight += 1;
+            }
+            dbg!(ret);
+        });
+
+        self.ctx().in_flight = in_flight;
+        Ok(())
+
+    }
+}
+
 async fn child_retire(nexus: String, child: Bdev) {
     error!("{:#?}", child);
 

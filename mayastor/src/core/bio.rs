@@ -17,14 +17,10 @@ use crate::{
     bdev::{
         nexus::{
             nexus_bdev::{Nexus, NEXUS_PRODUCT_ID},
-            nexus_fn_table::NexusFnTable,
         },
     },
-    core::{Bdev, Cores, GenericStatusCode, Mthread, NvmeStatus, IoChannel, Reactors},
-    nexus_uri::bdev_destroy,
+    core::{Bdev, IoChannel},
 };
-
-
 
 #[derive(Debug, Copy, Clone, PartialOrd, PartialEq, Eq)]
 pub enum IoType {
@@ -60,6 +56,12 @@ pub enum IoStatus {
     Failed,
     Pending,
     Success,
+}
+
+impl Default for IoStatus {
+    fn default() -> Self {
+        Self::Success
+    }
 }
 
 impl From<IoType> for u32 {
@@ -153,7 +155,15 @@ impl From<i8> for IoStatus {
 }
 
 #[derive(Clone)]
+#[repr(transparent)]
 pub struct Bio(NonNull<spdk_bdev_io>);
+
+trait BioOps {
+    fn readv(&mut self);
+    fn writev(&mut self);
+    fn setup(&mut self);
+    fn ctx<T>(&mut self) -> &mut T;
+}
 
 impl From<*mut c_void> for Bio {
     fn from(io: *mut c_void) -> Self {
@@ -192,6 +202,7 @@ impl Bio {
     /// false.
     #[inline]
     pub(crate) fn ok(&mut self) {
+        dbg!(self.0.as_ptr());
         // if cfg!(debug_assertions) {
         //     // have a child IO that has failed
         //     if self.ctx_as_mut_ref().status != IoStatus::Success {
@@ -268,7 +279,7 @@ impl Bio {
         unsafe { Nexus::from_raw((*b.as_ptr()).ctxt) }
     }
 
-    /// get the context specifics  of the given IO
+    /// get the context specifics of this IO
     #[inline]
     pub(crate) fn specific<T>(&mut self) -> &mut T {
         unsafe {
@@ -368,7 +379,7 @@ impl Debug for Bio {
             self.num_blocks(),
             self.io_type(),
             self.status(),
-            self
+            self.as_ptr(),
         )
     }
 }

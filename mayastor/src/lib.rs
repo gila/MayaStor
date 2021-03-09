@@ -1,3 +1,4 @@
+#![feature(in_band_lifetimes)]
 #[macro_use]
 extern crate ioctl_gen;
 #[macro_use]
