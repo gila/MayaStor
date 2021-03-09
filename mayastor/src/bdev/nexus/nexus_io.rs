@@ -117,7 +117,7 @@ impl NexusBio {
     #[inline(always)]
     pub fn setup(&mut self) {
         let ctx = self.ctx();
-        ctx.status = IoStatus::Success;
+        ctx.status = IoStatus::Pending;
         ctx.in_flight = 0;
     }
 
@@ -158,25 +158,34 @@ impl NexusBio {
             self.ctx().status = IoStatus::Failed;
         }
 
-        match self.disposition() {
-            Disposition::Complete(IoStatus::Success) => {
-                debug!("IO completed inflight is {}", self.ctx().in_flight);
+        if self.ctx().in_flight== 0 {
+
                 self.0.ok();
-            },
 
-            Disposition::Complete(IoStatus::Failed)  => {
-                debug!("IO complete but failed");
-                self.0.fail();
-            },
-
-            Disposition::Flying(IoStatus::Failed) => {
-                debug!("IO failed but IO in-flight {}", self.ctx().in_flight);
-            }
-            Disposition::Flying(_) => {
-                debug!("IO completed but IO in-flight {}", self.ctx().in_flight);
-            }
-            _ => {}
+            // if self.ctx().status == IoStatus::Failed {
+            //     self.0.fail();
+            // }
         }
+        //
+        // match self.disposition() {
+        //     Disposition::Complete(IoStatus::Success) => {
+        //         debug!("IO completed inflight is {}", self.ctx().in_flight);
+        //         self.0.ok();
+        //     },
+        //
+        //     Disposition::Complete(IoStatus::Failed)  => {
+        //         debug!("IO complete but failed");
+        //         self.0.fail();
+        //     },
+        //
+        //     Disposition::Flying(IoStatus::Failed) => {
+        //         debug!("IO failed but IO in-flight {}", self.ctx().in_flight);
+        //     }
+        //     Disposition::Flying(_) => {
+        //         debug!("IO completed but IO in-flight {}", self.ctx().in_flight);
+        //     }
+        //     _ => {}
+        // }
     }
 
     fn inner_channel(&self) -> &mut NexusChannelInner {
@@ -238,31 +247,28 @@ impl NexusBio {
     }
 
     fn writev(&mut self) -> Result<(), Errno> {
-        let offset = self.0.offset();
+        let offset = self.data_ent_offset();
         let mut in_flight : u8 = 0;
-
-        self.writers().for_each(|h| {
-            let (desc, ch) = h.io_tuple();
-            let ret = unsafe {
+        let results = self.inner_channel()
+            .writers
+            .iter()
+            .map(|c| unsafe {
+                let (desc, chan) = c.io_tuple();
                 spdk_bdev_writev_blocks(
                     desc,
-                    ch,
+                    chan,
                     self.0.iovs(),
                     self.0.iov_count(),
-                    self.0.offset() + offset,
+                    self.0.offset() + self.0.nexus_as_ref().data_ent_offset,
                     self.0.num_blocks(),
                     Some(Self::child_completion),
-                    self.0.as_ptr().cast(),
+                    self.0.as_ptr() as *mut _,
                 )
-            };
+            })
+            .collect::<Vec<_>>();
 
-            if ret == 0 {
-                in_flight += 1;
-            }
-            dbg!(ret);
-        });
-
-        self.ctx().in_flight = in_flight;
+        self.ctx().in_flight = self.inner_channel().writers.len() as u8;
+        dbg!(self.ctx().in_flight);
         Ok(())
 
     }

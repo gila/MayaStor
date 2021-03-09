@@ -26,9 +26,10 @@ fn nexus_nio() {
     }).unwrap();
 
     Reactor::block_on( async {
-        let h = BdevHandle::open("nexus0", true, true).unwrap();
-        let mut buf = h.dma_malloc(1024).expect("failed to allocate buffer");
-        let len = h.read_at(0, &mut buf).await.unwrap();
+
+        bdev_io::write_some("nexus0", 0, 0xff).await.unwrap();
+        bdev_io::read_some("nexus0", 0, 0xff).await.unwrap();
+
         mayastor_env_stop(0);
     }).unwrap();
 
