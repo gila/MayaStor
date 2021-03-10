@@ -17,7 +17,7 @@ fn nexus_nio() {
             None,
             &[
                 "malloc:///malloc0?size_mb=64".into(),
-                //"malloc:///malloc1?size_mb=64".into(),
+                "malloc:///malloc1?size_mb=64".into(),
             ],
         )
             .await
