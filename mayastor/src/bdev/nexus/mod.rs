@@ -18,6 +18,7 @@ macro_rules! c_str {
     };
 }
 
+pub mod child;
 pub mod nexus_bdev;
 pub mod nexus_bdev_children;
 pub mod nexus_bdev_rebuild;
