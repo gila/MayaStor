@@ -12,20 +12,50 @@ use crate::{
     bdev::device_lookup,
     core::{BlockDevice, BlockDeviceDescriptor, CoreError},
 };
+use crossbeam::atomic::AtomicCell;
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum State {
-    Opening,
+    /// the child is the opening state -- this state is only valid during
+    /// initial registration
+    Init,
+    /// the child is open and takes part of the normal IO path
     Open,
+    /// the child is marked to be closing
     Closing,
+    /// the child is getting closed and does not take part of the IO path
     Closed,
+    /// the child is faulted for `[Reason]' and does not part in the IO path
     Faulted(Reason),
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+impl ToString for State {
+    fn to_string(&self) -> String {
+        match *self {
+            State::Init => "Opening",
+            State::Open => "Open",
+            State::Closing => "Closing",
+            State::Closed => "Closed",
+            State::Faulted(r) => "Faulted",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum Reason {
     IOErrors,
     Missing,
+}
+
+impl ToString for Reason {
+    fn to_string(&self) -> String {
+        match *self {
+            Reason::IOErrors => "Faulted(to many IO errors)",
+            Reason::Missing => "Faulted(missing)",
+        }
+        .to_string()
+    }
 }
 
 #[derive(Debug, Snafu)]
@@ -35,6 +65,11 @@ pub enum Error {
         source: CoreError,
     },
     Exists,
+    Unknown,
+    OpenError {
+        state: State,
+        name: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -53,8 +88,11 @@ impl ChildList {
             .expect("Child list poisoned")
             .insert(name, Arc::clone(&c));
 
-        assert_eq!(c.lock().unwrap().state, State::Opening);
-        c.lock().unwrap().state = State::Open;
+        c.lock()
+            .unwrap()
+            .open()
+            .map(|s| assert_eq!(s, State::Open))
+            .unwrap();
 
         if old.is_some() {
             warn!("duplicate entry existed... this this entry will be dropped now!");
@@ -97,8 +135,11 @@ pub struct Child {
     /// the interior state of the child. The child state is needed to ensure
     /// proper synchronisation with the raw FFI layer. It may occur that raw
     /// RPC calls are made that remove the block device. This is discouraged
-    /// but can still happen, and so we must account for it
-    state: State,
+    /// but can still happen, and so we must account for it. The state does
+    /// not need to be atomic as the Child is guarded by a Mutex. However, we
+    /// want to prepare for lifting the mutex as it really should not be
+    /// needed to have the child itself, be guarded by a mutex.
+    state: AtomicCell<State>,
 }
 
 unsafe impl Send for Child {}
@@ -116,8 +157,7 @@ impl Debug for Child {
 
 impl Drop for Child {
     fn drop(&mut self) {
-        self.descriptor.take().unwrap();
-        self.device.take().unwrap();
+        self.close();
     }
 }
 
@@ -126,16 +166,11 @@ impl TryFrom<String> for Child {
 
     fn try_from(name: String) -> Result<Self, Self::Error> {
         if let Some(device) = device_lookup(name.as_ref()) {
-            let descriptor =
-                device.open(true).map_err(|source| Error::OpenChild {
-                    source,
-                })?;
-
             Ok(Self {
                 name: device.device_name(),
                 device: Some(device),
-                descriptor: Some(descriptor),
-                state: State::Opening,
+                descriptor: None,
+                state: AtomicCell::new(State::Init),
             })
         } else {
             Err(Error::OpenChild {
@@ -148,6 +183,8 @@ impl TryFrom<String> for Child {
 }
 
 impl Child {
+    /// create a new child device in order for this to succeed we must have a
+    /// valid underlying block device
     pub fn new(name: String) -> Result<Arc<Mutex<Self>>, Error> {
         if CHILD_LIST.lookup(&name).is_some() {
             error!(?name, "already exists in child list");
@@ -159,7 +196,80 @@ impl Child {
         }
     }
 
+    /// set the state to new state. if the state has transitioned it will return
+    /// Some(State)
+    fn set_state(&self, new_state: State) -> Option<State> {
+        let old = self.state.swap(new_state);
+        if old == new_state {
+            None
+        } else {
+            Some(old)
+        }
+    }
+
+    /// returns the current state
+    pub fn state(&self) -> State {
+        self.state.load()
+    }
+
     pub fn name(&self) -> String {
         self.name.clone()
+    }
+
+    /// Opens the new child device which is intended to reflect a normal open.
+    /// To open a child we must have an underlying block device. These are,
+    /// in the normal case provided by the kernel but here we must have our
+    /// own. Once we have a block device we must open it. Opening is done by
+    /// getting a descriptor. As long as we have a hold onto a descriptor
+    /// the block devices can not be destroyed
+    pub fn open(&mut self) -> Result<State, Error> {
+        let current = self.state();
+        if matches!(current, State::Open) {
+            assert_eq!(self.descriptor.is_none(), false);
+            assert_eq!(self.device.is_none(), false);
+            return Ok(State::Open);
+        }
+
+        return if matches!(
+            current,
+            State::Init | State::Closed | State::Faulted(_)
+        ) {
+            if let Some(device) = device_lookup(&self.name) {
+                let desc = device.open(true)?;
+                self.descriptor = Some(desc);
+                self.device = Some(device);
+                self.set_state(State::Open);
+                Ok(self.state())
+            } else {
+                self.set_state(State::Faulted(Reason::Missing));
+                Err(Error::OpenError {
+                    state: self.state(),
+                    name: self.name.clone(),
+                })
+            }
+        } else {
+            panic!("unhandled child state...");
+        };
+    }
+
+    /// Close the child, will close the associated channel and descriptor. It
+    /// will not however, destroy the underlying device. We only drop the
+    /// descriptor and the device such that eventually, the device MAY be
+    /// destroyed.
+    pub fn close(&mut self) -> Result<State, Error> {
+        let current = self.state();
+        return if matches!(current, State::Faulted(_) | State::Open) {
+            self.descriptor
+                .take()
+                .expect("trying to close a child with no descriptor");
+            self.device.take().expect("device is gone");
+            self.set_state(State::Init);
+            Ok(State::Init)
+        } else {
+            Err(Error::OpenError {
+                state: self.state(),
+                name: self.name.clone(),
+            })
+        };
     }
 }
