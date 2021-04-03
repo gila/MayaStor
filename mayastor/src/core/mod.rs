@@ -33,6 +33,7 @@ pub use env::{
     SIG_RECEIVED,
 };
 
+use crate::nexus_uri::NexusBdevError;
 pub use bio::{Bio, IoStatus, IoType};
 pub use handle::BdevHandle;
 pub use nvme::{
@@ -174,6 +175,10 @@ pub enum CoreError {
     },
     #[snafu(display("No devices available for I/O"))]
     NoDevicesAvailable {},
+    Exists,
+    ParseError {
+        source: NexusBdevError,
+    },
 }
 
 // Generic I/O completion status for block devices, which supports per-protocol

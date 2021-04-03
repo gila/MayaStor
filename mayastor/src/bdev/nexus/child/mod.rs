@@ -1,23 +1,24 @@
 use std::{
-    collections::HashMap,
     convert::TryFrom,
     fmt::{Debug, Formatter},
-    sync::{Arc, Mutex, RwLock},
 };
 
-use once_cell::sync::Lazy;
+use async_trait::async_trait;
+use nix::errno::Errno;
 use snafu::Snafu;
 
 use crate::{
-    bdev::device_lookup,
+    bdev::{device_lookup, Uri},
     core::{BlockDevice, BlockDeviceDescriptor, CoreError},
+    nexus_uri::{bdev_create, bdev_destroy},
+    subsys::child::Inventory,
 };
-use crossbeam::atomic::AtomicCell;
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum State {
     /// the child is the opening state -- this state is only valid during
-    /// initial registration
+    /// initial registration. The block device itself assumes to exist, but the
+    /// device has not been opened.
     Init,
     /// the child is open and takes part of the normal IO path
     Open,
@@ -27,6 +28,9 @@ pub enum State {
     Closed,
     /// the child is faulted for `[Reason]' and does not part in the IO path
     Faulted(Reason),
+    Destroying,
+    /// the underlying device is destroyed as well
+    Destroyed,
 }
 
 impl ToString for State {
@@ -36,7 +40,9 @@ impl ToString for State {
             State::Open => "Open",
             State::Closing => "Closing",
             State::Closed => "Closed",
-            State::Faulted(r) => "Faulted",
+            State::Destroyed => "Destroyed",
+            State::Destroying => "Destroying",
+            State::Faulted(_) => "Faulted",
         }
         .to_string()
     }
@@ -65,69 +71,37 @@ pub enum Error {
         source: CoreError,
     },
     Exists,
-    Unknown,
+    CloseError {
+        state: State,
+        name: String,
+    },
     OpenError {
         state: State,
         name: String,
     },
 }
 
-#[derive(Debug, Default)]
-pub struct ChildList {
-    entries: RwLock<HashMap<String, Arc<Mutex<Child>>>>,
-}
-
-impl ChildList {
-    /// insert a child in the global child list returning a child in the open
-    /// state
-    pub fn insert(&self, name: String, c: Arc<Mutex<Child>>) {
-        info!(?name, "inserting into child list");
-        let old = self
-            .entries
-            .write()
-            .expect("Child list poisoned")
-            .insert(name, Arc::clone(&c));
-
-        c.lock()
-            .unwrap()
-            .open()
-            .map(|s| assert_eq!(s, State::Open))
-            .unwrap();
-
-        if old.is_some() {
-            warn!("duplicate entry existed... this this entry will be dropped now!");
-        }
-    }
-
-    pub fn lookup<N: Into<String>>(
-        &self,
-        name: N,
-    ) -> Option<Arc<Mutex<Child>>> {
-        self.entries
-            .read()
-            .expect("child list poisoned")
-            .get(&name.into())
-            .map(|c| Arc::clone(&c))
-    }
-
-    pub fn drop_all(&self) {
-        self.entries.write().unwrap().clear();
-    }
-}
-
-/// global list of child devices
-pub static CHILD_LIST: Lazy<ChildList> = Lazy::new(ChildList::default);
 /// a child is an abstraction over BlockDevice this can either be a bdev or a
 /// nvme device. As long as the descriptor is not released, the underlying block
 /// device can not be destroyed. This is enforced by the bdev manager.
+///
+/// # Safety
+///
+/// As long as the block device has not been destroyed, this structure remains
+/// valid. The only way to destroy a block device is by calling ['bdev_create']
+/// and ['bdev_destroy']. A block device can not be destroyed while its opened.
+/// An open block device implies we have a descriptor
 pub struct Child {
     /// name of the child device -- this MAY be different from the BlockDevice
     /// it represents
     name: String,
+    /// uri of the device used
+    uri: String,
+    /// device URI used to create the block device
     /// the device refers to the underlying block device. The block device
     /// should not be removed during the lifetime of the child without
     /// ensuring proper notifications are upheld
-    device: Option<Box<dyn BlockDevice>>,
+    block_device: Option<Box<dyn BlockDevice>>,
     /// descriptor to the device which allows getting basic information of the
     /// device itself the descriptor can not be directly used to perform IO
     /// operations. To perform IO a handle for this thread must be obtained
@@ -139,7 +113,7 @@ pub struct Child {
     /// not need to be atomic as the Child is guarded by a Mutex. However, we
     /// want to prepare for lifting the mutex as it really should not be
     /// needed to have the child itself, be guarded by a mutex.
-    state: AtomicCell<State>,
+    state: State,
 }
 
 unsafe impl Send for Child {}
@@ -148,59 +122,117 @@ impl Debug for Child {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Child")
             .field("name", &self.name)
+            .field("uri", &self.uri)
             .field("state", &self.state)
-            .field("product", &self.device.as_ref().unwrap().product_name())
-            .field("claimed_by", &self.device.as_ref().unwrap().claimed_by())
             .finish()
     }
 }
 
 impl Drop for Child {
     fn drop(&mut self) {
-        self.close();
+        self.close().unwrap();
+    }
+}
+
+// we can not mock freestanding functions so use a trait with a default impl to
+// call into the standard device_lookup methods.
+// TODO: create BaseBdevOps trait for base bdevs
+#[async_trait(?Send)]
+trait ChildBaseBdevOps {
+    /// lookup a base block device
+    fn base_bdev_lookup(&self, name: &str) -> Option<Box<dyn BlockDevice>> {
+        device_lookup(name)
+    }
+
+    async fn base_bdev_destroy(&self, name: &str) -> Result<(), CoreError> {
+        bdev_destroy(name)
+            .await
+            .map_err(|_e| CoreError::BdevNotFound {
+                name: name.to_string(),
+            })
+    }
+
+    async fn base_bdev_create(&self, uri: &str) -> Result<Child, CoreError> {
+        let bdev = bdev_create(uri.as_ref()).await.map_err(|_e| {
+            CoreError::OpenBdev {
+                source: Errno::UnknownErrno,
+            }
+        })?;
+        Child::try_from(bdev)
     }
 }
 
 impl TryFrom<String> for Child {
-    type Error = Error;
+    type Error = CoreError;
 
-    fn try_from(name: String) -> Result<Self, Self::Error> {
-        if let Some(device) = device_lookup(name.as_ref()) {
+    fn try_from(uri: String) -> Result<Self, Self::Error> {
+        let name = Uri::parse(&uri)
+            .map_err(|source| CoreError::ParseError {
+                source,
+            })?
+            .get_name();
+        if let Some(block_device) = device_lookup(name.as_ref()) {
             Ok(Self {
-                name: device.device_name(),
-                device: Some(device),
+                name,
+                uri,
+                block_device: Some(block_device),
                 descriptor: None,
-                state: AtomicCell::new(State::Init),
+                state: State::Init,
             })
         } else {
-            Err(Error::OpenChild {
-                source: CoreError::BdevNotFound {
-                    name: name.into(),
-                },
+            Err(CoreError::BdevNotFound {
+                name: name.into(),
             })
         }
     }
 }
 
+impl ChildBaseBdevOps for Child {}
+#[cfg_attr(test, automock)]
 impl Child {
     /// create a new child device in order for this to succeed we must have a
-    /// valid underlying block device
-    pub fn new(name: String) -> Result<Arc<Mutex<Self>>, Error> {
-        if CHILD_LIST.lookup(&name).is_some() {
+    /// valid underlying block device. Note that we do not open the device
+    fn new(name: String) -> Result<Self, CoreError> {
+        if Inventory::get().lookup(&name).is_some() {
             error!(?name, "already exists in child list");
-            return Err(Error::Exists);
+            Err(CoreError::Exists)
         } else {
-            let child = Arc::new(Mutex::new(Child::try_from(name.clone())?));
-            CHILD_LIST.insert(name, Arc::clone(&child));
-            Ok(child)
+            Ok(Self {
+                name: name.clone(),
+                uri: name,
+                block_device: None,
+                descriptor: None,
+                state: State::Init,
+            })
         }
+    }
+
+    /// Destroys the underlying base block device and consumes self
+    pub async fn destroy(&mut self) -> Result<(), CoreError> {
+        if self.state() != State::Closed {
+            return Err(CoreError::NotSupported {
+                source: Errno::ENODEV,
+            });
+        }
+        self.set_state(State::Destroying);
+        let _ = self.base_bdev_destroy(&self.name).await.map_err(|_e| {
+            self.set_state(State::Faulted(Reason::Missing));
+            CoreError::OpenBdev {
+                source: Errno::UnknownErrno,
+            }
+        })?;
+
+        self.set_state(State::Destroyed);
+
+        Ok(())
     }
 
     /// set the state to new state. if the state has transitioned it will return
     /// Some(State)
-    fn set_state(&self, new_state: State) -> Option<State> {
-        let old = self.state.swap(new_state);
-        if old == new_state {
+    fn set_state(&mut self, new_state: State) -> Option<State> {
+        let old = self.state;
+        self.state = new_state;
+        if old == self.state {
             None
         } else {
             Some(old)
@@ -209,7 +241,11 @@ impl Child {
 
     /// returns the current state
     pub fn state(&self) -> State {
-        self.state.load()
+        self.state
+    }
+
+    pub fn uri(&self) -> String {
+        self.uri.clone()
     }
 
     pub fn name(&self) -> String {
@@ -221,55 +257,83 @@ impl Child {
     /// in the normal case provided by the kernel but here we must have our
     /// own. Once we have a block device we must open it. Opening is done by
     /// getting a descriptor. As long as we have a hold onto a descriptor
-    /// the block devices can not be destroyed
-    pub fn open(&mut self) -> Result<State, Error> {
-        let current = self.state();
-        if matches!(current, State::Open) {
+    /// the block devices can not be destroyed.
+    ///
+    /// If the device was previously faulted, we will retry to create the child.
+    /// If we fail to do, so we mark the device as missing.
+    pub fn open(&mut self) -> Result<State, CoreError> {
+        // if the device is already open, assert that it is in the proper state
+        if matches!(self.state(), State::Open) {
             assert_eq!(self.descriptor.is_none(), false);
-            assert_eq!(self.device.is_none(), false);
+            assert_eq!(self.block_device.is_none(), false);
+            assert_eq!(
+                self.name,
+                self.block_device.as_ref().unwrap().device_name()
+            );
             return Ok(State::Open);
         }
 
-        return if matches!(
-            current,
-            State::Init | State::Closed | State::Faulted(_)
-        ) {
-            if let Some(device) = device_lookup(&self.name) {
-                let desc = device.open(true)?;
-                self.descriptor = Some(desc);
-                self.device = Some(device);
-                self.set_state(State::Open);
-                Ok(self.state())
-            } else {
-                self.set_state(State::Faulted(Reason::Missing));
-                Err(Error::OpenError {
-                    state: self.state(),
-                    name: self.name.clone(),
-                })
+        match self.state() {
+            // we can open a device that is in the these states
+            State::Init | State::Closed | State::Faulted(_) => {
+                return if let Some(device) = self.base_bdev_lookup(&self.name) {
+                    let desc = device.open(true)?;
+                    self.descriptor = Some(desc);
+                    self.block_device = Some(device);
+                    self.set_state(State::Open);
+                    Ok(self.state)
+                } else {
+                    self.set_state(State::Faulted(Reason::Missing));
+                    Err(CoreError::BdevNotFound {
+                        name: self.name.clone(),
+                    })
+                };
+                // a device that is destroyed or in the process of being
+                // destroyed, can not be opened and must be
+                // recreated we do not know if a bdev_destroy()
+                // has been issued or if an async callback is
+                // pending. Even if we did, we can not cancel
+                // this request.
             }
-        } else {
-            panic!("unhandled child state...");
-        };
+            State::Destroyed | State::Destroying => {
+                return Err(CoreError::BdevNotFound {
+                    name: self.name.clone(),
+                });
+            }
+            _ => {
+                panic!("dont know how to handle this case")
+            }
+        }
     }
 
-    /// Close the child, will close the associated channel and descriptor. It
+    /// Close the child, will close the associated descriptor. It
     /// will not however, destroy the underlying device. We only drop the
     /// descriptor and the device such that eventually, the device MAY be
     /// destroyed.
     pub fn close(&mut self) -> Result<State, Error> {
-        let current = self.state();
-        return if matches!(current, State::Faulted(_) | State::Open) {
-            self.descriptor
-                .take()
-                .expect("trying to close a child with no descriptor");
-            self.device.take().expect("device is gone");
-            self.set_state(State::Init);
-            Ok(State::Init)
+        return if matches!(self.state(), State::Open) {
+            self.descriptor.take();
+            self.block_device.take();
+            // if the child was open, set it to the init state
+            self.set_state(State::Closed);
+            Ok(self.state())
         } else {
-            Err(Error::OpenError {
+            Err(Error::CloseError {
                 state: self.state(),
                 name: self.name.clone(),
             })
         };
+    }
+    /// fault a child for some ['Reason'] faulting a child does nothing other
+    /// than updating its state
+    pub fn fault(&mut self, r: Reason) -> Result<State, Error> {
+        let current = self.state();
+
+        if matches!(current, State::Faulted(_)) {
+            info!(?self.name, ?current, "already faulted");
+            return Ok(current);
+        }
+        self.set_state(State::Faulted(r));
+        Ok(State::Faulted(r))
     }
 }

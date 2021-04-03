@@ -1,6 +1,8 @@
 use crate::core::{CoreError, DmaBuf, DmaError, IoCompletionStatus, IoType};
 use async_trait::async_trait;
 use merge::Merge;
+#[cfg(test)]
+use mockall::{automock, predicate::*};
 use std::os::raw::c_void;
 
 #[derive(Debug, Default, Clone, Copy, Merge)]
@@ -25,6 +27,7 @@ use spdk_sys::iovec;
  * Core trait that represents a block device.
  * TODO: Add text.
  */
+#[cfg_attr(test, automock)]
 #[async_trait(?Send)]
 pub trait BlockDevice {
     /// Returns total size in bytes of the device.
@@ -80,6 +83,7 @@ pub trait BlockDevice {
  * Core trait that represents a descriptor for an opened block device.
  * TODO: Add text.
  */
+#[cfg_attr(test, automock)]
 pub trait BlockDeviceDescriptor {
     fn get_device(&self) -> Box<dyn BlockDevice>;
     fn into_handle(

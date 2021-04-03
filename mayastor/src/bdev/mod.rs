@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 
 pub use nexus::{
-    child,
     nexus_bdev::{
         nexus_create,
         nexus_lookup,

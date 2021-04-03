@@ -114,4 +114,5 @@ version = "0.7"
 [dev-dependencies]
 assert_matches = "1.2"
 run_script = "*"
+mockall = "*"
 composer = { path = "../composer" }
