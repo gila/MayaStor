@@ -1,3 +1,4 @@
+#![feature(core_intrinsics)]
 #[macro_use]
 extern crate ioctl_gen;
 #[macro_use]

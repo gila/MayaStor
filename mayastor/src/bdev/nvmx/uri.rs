@@ -190,7 +190,8 @@ impl<'probe> NvmeControllerContext<'probe> {
         let device_defaults = NvmeBdevOpts::default();
         let mut opts = controller::options::Builder::new()
             .with_keep_alive_timeout_ms(device_defaults.keep_alive_timeout_ms)
-            .with_transport_retry_count(device_defaults.retry_count as u8);
+            .with_transport_retry_count(device_defaults.retry_count as u8)
+            .with_fabrics_connect_timeout_us(1_000_000);
 
         if let Ok(host_nqn) = std::env::var("HOSTNQN") {
             opts = opts.with_hostnqn(host_nqn);

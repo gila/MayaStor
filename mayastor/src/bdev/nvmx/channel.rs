@@ -65,6 +65,7 @@ impl<'a> NvmeIoChannel<'a> {
         }
     }
 }
+#[derive(Debug)]
 pub struct IoQpair {
     qpair: NonNull<spdk_nvme_qpair>,
     ctrlr_handle: SpdkNvmeController,
@@ -138,7 +139,7 @@ impl IoQpair {
         }
     }
 }
-
+#[derive(Debug)]
 struct PollGroup(NonNull<spdk_nvme_poll_group>);
 
 impl PollGroup {
@@ -196,7 +197,6 @@ impl Drop for IoQpair {
         debug!(?qpair, "qpair successfully dropped,");
     }
 }
-
 pub struct NvmeIoChannelInner<'a> {
     poll_group: PollGroup,
     poller: poller::Poller<'a>,
@@ -327,6 +327,7 @@ impl NvmeIoChannelInner<'_> {
         &mut self.io_stats_controller
     }
 }
+#[derive(Debug)]
 pub struct IoStatsController {
     // Note that for the sake of optimization, all bytes-related I/O stats
     // (bytes_read, bytes_written and bytes_unmapped) are accounted in
@@ -390,16 +391,24 @@ pub struct NvmeControllerIoChannel(NonNull<spdk_io_channel>);
 
 extern "C" fn disconnected_qpair_cb(
     qpair: *mut spdk_nvme_qpair,
-    _ctx: *mut c_void,
+    ctx: *mut c_void,
 ) {
     warn!(?qpair, "NVMe qpair disconnected");
 
-    // Currently, just try to reconnect indefinitely. If we are doing a
-    // reset, the reset will reconnect a qpair, and we will stop getting a
-    // callback for this one.
-    unsafe {
-        spdk_nvme_ctrlr_reconnect_io_qpair(qpair);
-    }
+    let nvme_channel = NvmeIoChannel::from_raw(ctx).inner_mut();
+
+    nvme_channel.poller.pause();
+
+    info!("stopped poller for");
+
+    unsafe { nvme_qpair_abort_reqs(qpair, 1) };
+
+    //  Currently, just try to reconnect indefinitely. If we are doing a
+    //  reset, the reset will reconnect a qpair, and we will stop getting a
+    //  callback for this one.
+    // unsafe {
+    //     dbg!(spdk_nvme_ctrlr_reconnect_io_qpair(qpair));
+    // }
 }
 
 extern "C" fn nvme_poll(ctx: *mut c_void) -> i32 {

@@ -31,7 +31,7 @@ use crate::{
     nexus_uri::{self, NexusBdevError},
 };
 
-use super::{aio, iscsi, loopback, malloc, null, nvme, nvmx, uring};
+use super::{aio, iscsi, loopback, malloc, null, nvmf, nvme, nvmx, uring};
 
 impl Uri {
     pub fn parse(
@@ -54,6 +54,7 @@ impl Uri {
             "loopback" => Ok(Box::new(loopback::Loopback::try_from(&url)?)),
             "iscsi" => Ok(Box::new(iscsi::Iscsi::try_from(&url)?)),
             "pcie" => Ok(Box::new(nvme::NVMe::try_from(&url)?)),
+            "xxx" => Ok(Box::new(nvmf::Nvmf::try_from(&url)?)),
 
             // also for testing - requires Linux 5.1 or higher
             "uring" => Ok(Box::new(uring::Uring::try_from(&url)?)),

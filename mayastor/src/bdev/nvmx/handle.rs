@@ -1,9 +1,14 @@
-use std::{alloc::Layout, mem::ManuallyDrop, os::raw::c_void, sync::Arc};
-
 use async_trait::async_trait;
 use futures::channel::oneshot;
 use nix::errno::Errno;
 use once_cell::sync::OnceCell;
+use std::{
+    alloc::Layout,
+    intrinsics::breakpoint,
+    mem::ManuallyDrop,
+    os::raw::c_void,
+    sync::Arc,
+};
 
 use spdk_sys::{
     self,
@@ -237,7 +242,6 @@ extern "C" fn nvme_queued_next_sge(
 }
 
 /// Notify the caller and deallocate Nvme IO context.
-#[inline]
 fn complete_nvme_command(ctx: *mut NvmeIoCtx, cpl: *const spdk_nvme_cpl) {
     let io_ctx = unsafe { &mut *ctx };
     let op_succeeded = nvme_cpl_succeeded(cpl);
@@ -248,7 +252,6 @@ fn complete_nvme_command(ctx: *mut NvmeIoCtx, cpl: *const spdk_nvme_cpl) {
         let stats_controller = inner.get_io_stats_controller();
         stats_controller.account_block_io(io_ctx.op, 1, io_ctx.num_blocks);
     }
-
     // Adjust the number of active I/O.
     inner.discard_io();
 

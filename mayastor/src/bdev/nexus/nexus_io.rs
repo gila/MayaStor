@@ -88,7 +88,6 @@ pub struct NioCtx {
     num_ok: u8,
     status: IoStatus,
     channel: NonNull<spdk_io_channel>,
-    core: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +103,7 @@ enum Disposition {
 }
 
 pub(crate) fn nexus_submit_io(mut io: NexusBio) {
-    if let Err(_e) = match io.cmd() {
+    if let Err(e) = match io.cmd() {
         IoType::Read => io.readv(),
         // these IOs are submitted to all the underlying children
         IoType::Write | IoType::WriteZeros | IoType::Reset | IoType::Unmap => {
@@ -133,7 +132,8 @@ pub(crate) fn nexus_submit_io(mut io: NexusBio) {
         // zillions of similar error messages for faulted nexuses.
         // Need to rethink the approach for error notifications here.
 
-        // error!(?e, ?io, "Error during IO submission");
+        //error!(?e, ?io, "Error during IO submission");
+        io.fail();
     }
 }
 
@@ -147,7 +147,6 @@ impl NexusBio {
         let mut bio = NexusBio::from(io);
         let ctx = bio.ctx_as_mut();
         // for verification purposes when retiring a child
-        ctx.core = Cores::current();
         ctx.channel = NonNull::new(channel).unwrap();
         ctx.status = IoStatus::Pending;
         ctx.in_flight = 0;
@@ -183,6 +182,13 @@ impl NexusBio {
     /// Retire(IoStatus::Success) it means that we retire the current child and
     /// then, return mark the IO successful.
     fn disposition(&mut self) -> Disposition {
+        if self.ctx().status == IoStatus::Failed
+            && self.io_type() == IoType::Read
+        {
+            error!("read IO failed");
+            return Disposition::Retire(IoStatus::Failed);
+        }
+
         let ctx = self.ctx_as_mut();
         match ctx.status {
             // all child IO's completed, complete the parent IO
@@ -234,7 +240,6 @@ impl NexusBio {
         child: &dyn BlockDevice,
         status: IoCompletionStatus,
     ) {
-        assert_eq!(self.ctx().core, Cores::current());
         let success = status == IoCompletionStatus::Success;
         let device_name = child.device_name();
 
@@ -276,6 +281,20 @@ impl NexusBio {
 
                 self.try_retire(child, status);
                 self.ok();
+            }
+
+            Disposition::Retire(IoStatus::Failed) => {
+                assert_eq!(success, false);
+                error!(
+                    ?self,
+                    ?device_name,
+                    "{}:{}",
+                    Cores::current(),
+                    "last child IO failed completion"
+                );
+
+                self.try_retire(child, status);
+                self.fail();
             }
 
             // IO still in flight (pending) fail this IO and continue by setting
@@ -320,6 +339,28 @@ impl NexusBio {
         &*self.inner_channel().readers[i]
     }
 
+    fn remove_child(&mut self, name: String) {
+        if let Some(idx) = self
+            .inner_channel()
+            .readers
+            .iter_mut()
+            .position(|h| h.get_device().device_name() == name)
+        {
+            let hdl = self.inner_channel().readers.remove(idx);
+            self.inner_channel().deadlist.push(hdl);
+        }
+
+        if let Some(idx) = self
+            .inner_channel()
+            .writers
+            .iter_mut()
+            .position(|h| h.get_device().device_name() == name)
+        {
+            let hdl = self.inner_channel().writers.remove(idx);
+            self.inner_channel().deadlist.push(hdl);
+        }
+    }
+
     /// submit a read operation to one of the children of this nexus
     #[inline(always)]
     fn submit_read(
@@ -343,7 +384,6 @@ impl NexusBio {
                 self.ctx_as_mut().in_flight += 1;
             })
         } else {
-            self.fail();
             Err(CoreError::NoDevicesAvailable {})
         }
     }
@@ -483,12 +523,14 @@ impl NexusBio {
         if inflight != 0 {
             self.ctx_as_mut().in_flight = inflight;
             self.ctx_as_mut().status = status;
+            Ok(())
         } else {
+            self.fail();
             // if no IO was submitted at all, we can fail the IO now.
             // TODO: Support of IoStatus::NoMemory in ENOMEM-related errors.
-            self.fail();
+
+            Ok(())
         }
-        result
     }
 
     fn try_retire(
@@ -496,7 +538,7 @@ impl NexusBio {
         child: &dyn BlockDevice,
         status: IoCompletionStatus,
     ) {
-        trace!(?status);
+        trace!(?status, "try retire");
 
         if let IoCompletionStatus::NvmeError(nvme_status) = status {
             if nvme_status
@@ -511,6 +553,7 @@ impl NexusBio {
                 return;
             }
         }
+        self.remove_child(child.device_name());
 
         Reactors::master().send_future(Self::child_retire(
             self.nexus_as_ref().name.clone(),

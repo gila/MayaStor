@@ -28,7 +28,7 @@ use crate::{
         NvmeController,
         NVME_CONTROLLERS,
     },
-    core::{CoreError, DeviceIoController, DeviceTimeoutAction},
+    core::{CoreError, DeviceIoController, DeviceTimeoutAction, Reactors},
 };
 
 impl TryFrom<u32> for DeviceTimeoutAction {

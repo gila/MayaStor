@@ -26,7 +26,7 @@ use spdk_sys::iovec;
  * TODO: Add text.
  */
 #[async_trait(?Send)]
-pub trait BlockDevice {
+    pub trait BlockDevice {
     /// Returns total size in bytes of the device.
     fn size_in_bytes(&self) -> u64;
 

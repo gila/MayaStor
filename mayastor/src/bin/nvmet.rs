@@ -64,7 +64,7 @@ fn main() {
 
     let margs = MayastorCliArgs {
         rpc_address: "0.0.0.0:10124".to_string(),
-        reactor_mask: "0xF".to_string(),
+        reactor_mask: "0xF0".to_string(),
         ..Default::default()
     };
 

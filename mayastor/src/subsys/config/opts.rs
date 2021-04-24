@@ -268,8 +268,8 @@ impl Default for NvmeBdevOpts {
     fn default() -> Self {
         Self {
             action_on_timeout: SPDK_BDEV_NVME_TIMEOUT_ACTION_ABORT,
-            timeout_us: try_from_env("NVME_TIMEOUT_US", 30_000_000),
-            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 10_000),
+            timeout_us: try_from_env("NVME_TIMEOUT_US", 1_000_000),
+            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 100_000),
             retry_count: try_from_env("NVME_RETRY_COUNT", 3),
             arbitration_burst: 0,
             low_priority_weight: 0,
@@ -277,7 +277,7 @@ impl Default for NvmeBdevOpts {
             high_priority_weight: 0,
             nvme_adminq_poll_period_us: try_from_env(
                 "NVME_ADMINQ_POLL_PERIOD_US",
-                0,
+                1000,
             ),
             nvme_ioq_poll_period_us: try_from_env("NVME_IOQ_POLL_PERIOD_US", 0),
             io_queue_requests: 0,

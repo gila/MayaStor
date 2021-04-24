@@ -30,6 +30,7 @@ pub(crate) struct NexusChannel {
 pub(crate) struct NexusChannelInner {
     pub(crate) writers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
+    pub(crate) deadlist: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     device: *mut c_void,
 }
@@ -125,6 +126,7 @@ impl NexusChannelInner {
         // channel
         self.writers.clear();
         self.readers.clear();
+        self.deadlist.clear();
         self.previous = 0;
 
         // iterate over all our children which are in the open state
@@ -184,6 +186,7 @@ impl NexusChannel {
         let mut channels = Box::new(NexusChannelInner {
             writers: Vec::new(),
             readers: Vec::new(),
+            deadlist: Vec::new(),
             previous: 0,
             device,
         });

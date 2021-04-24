@@ -13,9 +13,10 @@ rm libspdk.so
 	--target-arch=nehalem \
 	--without-isal \
 	--with-iscsi-initiator \
+	--disable-unit-tests \
+	--disable-tests \
 	--with-crypto \
-	--with-uring \
-	--enable-unit-tests
+	--with-uring
 
 make -j $(nproc)
 
