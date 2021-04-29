@@ -78,12 +78,9 @@ impl Mthread {
     /// long-running functions. In general if you follow the nodejs event loop
     /// model, you should be good.
     pub fn with<T, F: FnOnce() -> T>(self, f: F) -> T {
-        let th = Self::current();
         self.enter();
         let out = f();
-        if let Some(t) = th {
-            t.enter();
-        }
+        self.exit();
         out
     }
 
@@ -121,6 +118,8 @@ impl Mthread {
     /// destroy the given thread waiting for it to become ready to destroy
     pub fn destroy(self) {
         debug!("destroying thread {}...{:p}", self.name(), self.0);
+        let previous = Mthread::current();
+
         unsafe {
             spdk_set_thread(self.0.as_ptr());
             // set that we *want* to exit, but we have not exited yet
@@ -135,6 +134,10 @@ impl Mthread {
         }
 
         debug!("thread {:p} destroyed", self.0);
+
+        if let Some(previous) = previous {
+            previous.enter();
+        }
     }
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -178,6 +181,39 @@ impl Mthread {
             spdk_thread_send_msg(
                 self.0.as_ptr(),
                 Some(trampoline::<F, T>),
+                Box::into_raw(ctx).cast(),
+            )
+        };
+        assert_eq!(rc, 0);
+    }
+
+    /// send the given thread 'msg' in xPDK speak.
+    pub fn on<F>(&self, f: F)
+    where
+        F: FnOnce(),
+    {
+        // context structure which is passed to the callback as argument
+        struct Ctx<F> {
+            closure: F,
+        }
+
+        // helper routine to unpack the closure and its arguments
+        extern "C" fn trampoline<F>(arg: *mut c_void)
+        where
+            F: FnOnce(),
+        {
+            let ctx = unsafe { Box::from_raw(arg as *mut Ctx<F>) };
+            (ctx.closure)()
+        }
+
+        let ctx = Box::new(Ctx {
+            closure: f,
+        });
+
+        let rc = unsafe {
+            spdk_thread_send_msg(
+                self.0.as_ptr(),
+                Some(trampoline::<F>),
                 Box::into_raw(ctx).cast(),
             )
         };

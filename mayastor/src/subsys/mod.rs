@@ -9,6 +9,11 @@ pub use config::{
     NexusBdev,
     Pool,
 };
+use futures::{
+    channel::oneshot::Receiver,
+    task::{Context, Poll},
+    Future,
+};
 pub use nvmf::{
     create_snapshot,
     set_snapshot_time,
@@ -24,6 +29,11 @@ use spdk_sys::{
     spdk_add_subsystem_depend,
     spdk_subsystem_depend,
 };
+use std::{
+    fmt::{Debug, Display},
+    mem::ManuallyDrop,
+    pin::Pin,
+};
 
 pub use mbus::{
     mbus_endpoint,
@@ -32,11 +42,103 @@ pub use mbus::{
     MessageBusSubsystem,
 };
 
-use crate::subsys::nvmf::Nvmf;
+use crate::{
+    core::{CoreError, Cores, Mthread},
+    subsys::nvmf::Nvmf,
+};
 
 mod config;
 mod mbus;
 mod nvmf;
+
+#[derive(Debug)]
+pub struct Service {
+    name: String,
+    core: Cores,
+    thread: Mthread,
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        info!(?self, "dropping service");
+        self.thread.destroy();
+    }
+}
+
+impl Service {
+    pub fn new(name: String, core: Cores) -> Self {
+        let thread = Mthread::new(name.clone(), core.id())
+            .expect("failed to create service");
+        Self {
+            name,
+            core,
+            thread,
+        }
+    }
+
+    pub fn with(&self, f: impl FnOnce()) {
+        // wrap the closure into a checker that validates runtime constraints
+        let thread = self.thread;
+
+        self.thread.on(move || {
+            assert_eq!(
+                thread.into_raw(),
+                Mthread::current().unwrap().into_raw()
+            );
+            f()
+        });
+    }
+
+    pub fn spawn_local<F: 'static, R: 'static, E: 'static>(
+        &self,
+        f: F,
+    ) -> Result<Receiver<Result<R, E>>, CoreError>
+    where
+        F: Future<Output = Result<R, E>>,
+        R: Send + Debug,
+        E: Send + Display + Debug,
+    {
+        struct Checked<F> {
+            thread: Mthread,
+            inner: ManuallyDrop<F>,
+        }
+
+        impl<F> Drop for Checked<F> {
+            fn drop(&mut self) {
+                assert_eq!(Mthread::current().unwrap(), self.thread);
+                info!("running on {:?}", Mthread::current());
+                unsafe {
+                    ManuallyDrop::drop(&mut self.inner);
+                }
+
+                self.thread.exit();
+            }
+        }
+
+        impl<F: Future> Future for Checked<F> {
+            type Output = F::Output;
+
+            fn poll(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<Self::Output> {
+                self.thread.enter();
+
+                info!("running on {:?}", Mthread::current());
+                unsafe { self.map_unchecked_mut(|c| &mut *c.inner).poll(cx) }
+            }
+        }
+
+        // Wrap the future into one that checks which thread it's on.
+        let future = Checked {
+            thread: self.thread,
+            inner: ManuallyDrop::new(f),
+        };
+
+        info!(?self.thread, "dispatching future on");
+        self.thread.spawn_local(future)
+    }
+}
 
 /// Register initial subsystems
 pub(crate) fn register_subsystem() {
