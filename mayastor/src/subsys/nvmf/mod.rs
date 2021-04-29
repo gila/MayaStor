@@ -14,14 +14,14 @@ use nix::errno::Errno;
 use snafu::Snafu;
 
 pub use admin_cmd::{create_snapshot, set_snapshot_time, NvmeCpl, NvmfReq};
-use poll_groups::PollGroup;
+pub use poll_groups::PollGroup;
 use spdk_sys::{
     spdk_subsystem,
     spdk_subsystem_fini_next,
     spdk_subsystem_init_next,
 };
 pub use subsystem::{NvmfSubsystem, SubType};
-pub use target::Target;
+pub use target::{Target, TargetState};
 
 use crate::{
     jsonrpc::{Code, RpcErrorCode},
@@ -32,7 +32,7 @@ mod admin_cmd;
 mod poll_groups;
 mod subsystem;
 mod target;
-mod transport;
+pub mod transport;
 
 // wrapper around our NVMF subsystem used for registration
 pub struct Nvmf(pub(crate) *mut spdk_subsystem);
@@ -78,7 +78,7 @@ pub enum Error {
 }
 
 thread_local! {
-    pub (crate) static NVMF_PGS: RefCell<Vec<PollGroup>> = RefCell::new(Vec::new());
+    pub  static NVMF_PGS: RefCell<Vec<PollGroup>> = RefCell::new(Vec::new());
 }
 
 impl Nvmf {
@@ -92,12 +92,13 @@ impl Nvmf {
         // set up custom NVMe Admin command handler
         admin_cmd::setup_create_snapshot_hdlr();
 
-        if Config::get().nexus_opts.nvmf_enable {
-            NVMF_TGT.with(|tgt| dbg!(tgt.borrow_mut().next_state()));
-        } else {
-            debug!("nvmf target disabled");
-            unsafe { spdk_subsystem_init_next(0) }
-        }
+        //if Config::get().nexus_opts.nvmf_enable {
+        //    NVMF_TGT.with(|tgt| dbg!(tgt.borrow_mut().next_state()));
+        //} else {
+        //    debug!("nvmf target disabled");
+        //    unsafe { spdk_subsystem_init_next(0) }
+        //}
+        unsafe { spdk_subsystem_init_next(0) }
     }
 
     extern "C" fn fini() {

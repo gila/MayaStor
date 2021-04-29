@@ -7,7 +7,6 @@ use std::{
 use nix::errno::Errno;
 
 use spdk_sys::{
-    nvmf_tgt_accept,
     spdk_env_get_core_count,
     spdk_nvmf_listen_opts,
     spdk_nvmf_listen_opts_init,
@@ -20,9 +19,6 @@ use spdk_sys::{
     spdk_nvmf_tgt_destroy,
     spdk_nvmf_tgt_listen_ext,
     spdk_nvmf_tgt_stop_listen,
-    spdk_poller,
-    spdk_poller_register_named,
-    spdk_poller_unregister,
     spdk_subsystem_fini_next,
     spdk_subsystem_init_next,
     SPDK_NVMF_DISCOVERY_NQN,
@@ -37,14 +33,14 @@ use crate::{
             poll_groups::PollGroup,
             subsystem::NvmfSubsystem,
             transport,
-            transport::{get_ipv4_address, TransportId},
+            transport::get_ipv4_address,
             Error,
             NVMF_PGS,
         },
         Config,
     },
 };
-
+use transport::TransportId;
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 thread_local! {
@@ -56,11 +52,10 @@ pub struct Target {
     /// the raw pointer to  our target
     pub(crate) tgt: NonNull<spdk_nvmf_tgt>,
     /// poller used to accept new connections on
-    acceptor_poller: NonNull<spdk_poller>,
-    /// the number of poll groups created for this target
     poll_group_count: u16,
     /// The current state of the target
     next_state: TargetState,
+    orig: Mthread,
 }
 
 impl Default for Target {
@@ -71,13 +66,11 @@ impl Default for Target {
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum TargetState {
+pub enum TargetState {
     /// the initial state of the target, allocate main data structures
     Init,
     /// initialize the poll groups
     PollGroupInit,
-    /// initialize the acceptor
-    AcceptorInit,
     /// add transport configurations
     AddTransport,
     /// add the listener for the target
@@ -106,9 +99,9 @@ impl Target {
         assert_eq!(Cores::current(), Cores::first());
         Self {
             tgt: NonNull::dangling(),
-            acceptor_poller: NonNull::dangling(),
             poll_group_count: 0,
             next_state: TargetState::Init,
+            orig: Mthread::current().unwrap(),
         }
     }
 
@@ -126,7 +119,6 @@ impl Target {
             });
         }
         self.tgt = NonNull::new(tgt).unwrap();
-
         self.next_state();
         Ok(())
     }
@@ -139,15 +131,12 @@ impl Target {
                 self.init().unwrap();
             }
             TargetState::PollGroupInit => {
-                self.next_state = TargetState::AcceptorInit;
-                self.init_poll_groups();
-            }
-            TargetState::AcceptorInit => {
                 self.next_state = TargetState::AddTransport;
-                self.init_acceptor();
+                self.init_poll_groups();
             }
             TargetState::AddTransport => {
                 self.next_state = TargetState::AddListener;
+                self.orig.enter();
                 self.add_transport();
             }
             TargetState::AddListener => {
@@ -196,21 +185,6 @@ impl Target {
         })
     }
 
-    /// initialize the acceptor so that we accept new incoming connections
-    fn init_acceptor(&mut self) {
-        self.acceptor_poller = NonNull::new(unsafe {
-            spdk_poller_register_named(
-                Some(Self::acceptor_poll),
-                self.tgt.as_ptr() as *mut _,
-                10000,
-                "mayastor_nvmf_tgt_poller\0" as *const _ as *mut _,
-            )
-        })
-        .unwrap();
-
-        self.next_state();
-    }
-
     /// init the poll groups per core
     fn init_poll_groups(&self) {
         Reactors::iter().for_each(|r| {
@@ -245,12 +219,6 @@ impl Target {
                 });
             });
         });
-    }
-    /// poll function that the acceptor runs
-    extern "C" fn acceptor_poll(tgt: *mut c_void) -> i32 {
-        unsafe { nvmf_tgt_accept(tgt) };
-
-        0
     }
 
     /// Listen for incoming connections by default we only listen on the replica
@@ -388,7 +356,6 @@ impl Target {
             "nvmf target accepting new connections and is ready to roll..{}",
             '\u{1F483}'
         );
-
         unsafe { spdk_subsystem_init_next(0) }
     }
 
@@ -400,8 +367,6 @@ impl Target {
                 spdk_subsystem_fini_next();
             }
         }
-
-        unsafe { spdk_poller_unregister(&mut self.acceptor_poller.as_ptr()) };
 
         let cfg = Config::get();
         let trid_nexus = TransportId::new(cfg.nexus_opts.nvmf_nexus_port);
@@ -434,3 +399,193 @@ impl Target {
         });
     }
 }
+
+//#[derive(Clone, Copy, Debug)]
+//struct NvmfTgt {
+//    tgt: NonNull<spdk_nvmf_tgt>,
+//    state: TargetState,
+//}
+//
+//impl NvmfTgt {
+//    pub fn new() -> Self {
+//        let cfg = Config::get();
+//        let tgt_ptr: Box<spdk_nvmf_target_opts> =
+//            cfg.nvmf_tcp_tgt_conf.clone().into();
+//
+//        let tgt =
+//            unsafe { spdk_nvmf_tgt_create(&*tgt_ptr as *const _ as *mut _) };
+//        Self {
+//            tgt: NonNull::new(tgt).unwrap(),
+//            state: TargetState::Init,
+//        }
+//    }
+//
+//    async fn init_poll_groups(&self) {
+//        let mut waiter = Vec::new();
+//        Reactors::iter().for_each(|r| {
+//            if let Some(t) = Mthread::new(
+//                format!("mayastor_nvmf_tcp_pg_core_{}", r.core()),
+//                r.core(),
+//            ) {
+//                waiter.push(Self::create_poll_group(self.tgt.as_ptr(), t));
+//            }
+//        });
+//
+//        futures::future::join_all(waiter).await;
+//    }
+//
+//    async fn create_poll_group(tgt: *mut spdk_nvmf_tgt, mt: Mthread) {
+//        mt.with(|| {
+//            let pg = PollGroup::new(tgt, mt);
+//            NVMF_PGS.with(|p| p.borrow_mut().push(pg));
+//        });
+//    }
+//
+//    fn listen(&mut self) {
+//
+//        let cfg = Config::get();
+//        let trid_nexus = TransportId::new(cfg.nexus_opts.nvmf_nexus_port);
+//        let mut opts = spdk_nvmf_listen_opts::default();
+//        unsafe {
+//            spdk_nvmf_listen_opts_init(
+//                &mut opts,
+//                std::mem::size_of::<spdk_nvmf_listen_opts>() as u64,
+//            );
+//        }
+//        let rc = unsafe {
+//            spdk_nvmf_tgt_listen_ext(
+//                self.tgt.as_ptr(),
+//                trid_nexus.as_ptr(),
+//                &mut opts,
+//            )
+//        };
+//
+//        if rc != 0 {
+//            panic!();
+//        }
+//
+//        let trid_replica = TransportId::new(cfg.nexus_opts.nvmf_replica_port);
+//        let rc = unsafe {
+//            spdk_nvmf_tgt_listen_ext(
+//                self.tgt.as_ptr(),
+//                trid_replica.as_ptr(),
+//                &mut opts,
+//            )
+//        };
+//
+//        if rc != 0 {
+//            panic!();
+//        }
+//        info!(
+//            "nvmf target listening on {}:({},{})",
+//            get_ipv4_address().unwrap(),
+//            trid_nexus.trsvcid.as_str(),
+//            trid_replica.trsvcid.as_str(),
+//        );
+//        Ok(())
+//    }
+//}
+//
+//#[derive(Debug)]
+//pub struct Service {
+//    name: String,
+//    core: Cores,
+//    thread: Mthread,
+//    tgt: NvmfTgt,
+//}
+//
+//use std::{
+//    fmt::{Debug, Display},
+//    mem::ManuallyDrop,
+//    pin::Pin,
+//    ptr::NonNull,
+//    sync::Mutex,
+//};
+//static NVMF_TARGET: OnceCell<Service> = OnceCell::new();
+//
+//impl Service {
+//    pub fn new(name: String, core: Cores) -> &'static Service {
+//        let thread = Mthread::new(name.clone(), core.id())
+//            .expect("failed to create service");
+//        let service = Self {
+//            name,
+//            core,
+//            thread,
+//            tgt: NvmfTgt::new(),
+//        };
+//
+//        NVMF_TARGET.get_or_init(|| service)
+//    }
+//
+//    pub fn with(&self, f: impl FnOnce()) {
+//        // wrap the closure into a checker that validates runtime constraints
+//        let thread = self.thread;
+//
+//        self.thread.on(move || {
+//            assert_eq!(
+//                thread.into_raw(),
+//                Mthread::current().unwrap().into_raw()
+//            );
+//            f()
+//        });
+//    }
+//
+//    pub fn with_cb<F, C, R>(&self, f: F, callback: C)
+//    where
+//        F: FnOnce() -> R,
+//        C: FnMut(R),
+//        R: Send + Debug,
+//    {
+//        self.thread.on_cb(f, callback);
+//    }
+//
+//    pub fn spawn_local<F: 'static, R: 'static, E: 'static>(
+//        &self,
+//        f: F,
+//    ) -> Result<Receiver<Result<R, E>>, CoreError>
+//    where
+//        F: Future<Output = Result<R, E>>,
+//        R: Send + Debug,
+//        E: Send + Display + Debug,
+//    {
+//        struct Checked<F> {
+//            thread: Mthread,
+//            inner: ManuallyDrop<F>,
+//        }
+//
+//        impl<F> Drop for Checked<F> {
+//            fn drop(&mut self) {
+//                assert_eq!(Mthread::current().unwrap(), self.thread);
+//                info!("running on {:?}", Mthread::current());
+//                unsafe {
+//                    ManuallyDrop::drop(&mut self.inner);
+//                }
+//
+//                self.thread.exit();
+//            }
+//        }
+//
+//        impl<F: Future> Future for Checked<F> {
+//            type Output = F::Output;
+//
+//            fn poll(
+//                self: Pin<&mut Self>,
+//                cx: &mut Context<'_>,
+//            ) -> Poll<Self::Output> {
+//                self.thread.enter();
+//
+//                info!("running on {:?}", Mthread::current());
+//                unsafe { self.map_unchecked_mut(|c| &mut *c.inner).poll(cx) }
+//            }
+//        }
+//
+//        // Wrap the future into one that checks which thread it's on.
+//        let future = Checked {
+//            thread: self.thread,
+//            inner: ManuallyDrop::new(f),
+//        };
+//
+//        info!(?self.thread, "dispatching future on");
+//        self.thread.spawn_local(future)
+//    }
+//}
