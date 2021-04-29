@@ -89,6 +89,15 @@ impl Service {
         });
     }
 
+    pub fn with_cb<F, C:, R >(&self, f: F, callback: C)
+    where
+        F: FnOnce() -> R,
+        C: FnMut(R),
+        R: Send + Debug,
+    {
+        self.thread.on_cb(f, callback);
+    }
+
     pub fn spawn_local<F: 'static, R: 'static, E: 'static>(
         &self,
         f: F,

@@ -15,6 +15,7 @@ use spdk_sys::{
 };
 
 use crate::core::{cpu_cores::CpuMask, CoreError, Cores, Reactors};
+use core::marker::PhantomData;
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use nix::errno::Errno;
 use std::{
@@ -22,7 +23,6 @@ use std::{
     future::Future,
     ptr::NonNull,
 };
-
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("Event spawned from a non-spdk thread"))]
@@ -214,6 +214,48 @@ impl Mthread {
             spdk_thread_send_msg(
                 self.0.as_ptr(),
                 Some(trampoline::<F>),
+                Box::into_raw(ctx).cast(),
+            )
+        };
+        assert_eq!(rc, 0);
+    }
+
+    /// send the given thread 'msg' in xPDK speak.
+    pub fn on_cb<F, C, R>(&self, f: F, callback: C)
+    where
+        F: FnOnce() -> R,
+        C: FnMut(R),
+        R: Send + Debug,
+    {
+        // context structure which is passed to the callback as argument
+        struct Ctx<F, C,R> 
+        where F: FnOnce() -> R,
+        {
+            closure: F,
+            callback: C,
+        }
+
+        // helper routine to unpack the closure and its arguments
+        extern "C" fn trampoline<F, C,R>(arg: *mut c_void)
+        where
+            F: FnOnce() -> R,
+            C: FnMut(R),
+            R: Send + Debug,
+        {
+            let mut ctx = unsafe { Box::from_raw(arg as *mut Ctx<F, C,R>) };
+            let r = (ctx.closure)();
+            (ctx.callback)(r)
+        }
+
+        let ctx = Box::new(Ctx::<F, C,R> {
+            closure: f,
+            callback,
+        });
+
+        let rc = unsafe {
+            spdk_thread_send_msg(
+                self.0.as_ptr(),
+                Some(trampoline::<F, C,R>),
                 Box::into_raw(ctx).cast(),
             )
         };
