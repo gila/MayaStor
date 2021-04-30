@@ -1,13 +1,7 @@
 use mayastor::{
-    core::{
-        CoreError,
-        Cores,
-        MayastorCliArgs,
-        Mthread,
-    },
+    core::{CoreError, Cores, MayastorCliArgs, Mthread},
     subsys::Service,
-}
-;
+};
 pub mod common;
 use common::MayastorTest;
 use mayastor::{
@@ -65,6 +59,13 @@ async fn service_test() {
         bdev.share_nvmf(None).await
     });
 
+    let l = rx.unwrap().await;
+    dbg!(l);
+
+    let rx = Mthread::get_init().spawn_local(async move {
+        bdev_create("nvmf://127.0.0.1:8420/nqn.2019-05.io.openebs:malloc0")
+            .await
+    });
     let l = rx.unwrap().await;
     dbg!(l);
 }

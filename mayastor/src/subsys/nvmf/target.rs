@@ -4,9 +4,7 @@ use std::{
     ptr::NonNull,
 };
 
-
 use nix::errno::Errno;
-
 
 use spdk_sys::{
     spdk_env_get_core_count,

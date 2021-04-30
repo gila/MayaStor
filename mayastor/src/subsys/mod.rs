@@ -21,6 +21,7 @@ use crate::ffihelper::{
     done_errno_cb,
     AsStr,
     ErrnoResult,
+    FfiResult,
     IntoCString,
 };
 pub use nvmf::{
@@ -101,10 +102,17 @@ impl NvmfTgt {
         }
     }
 
+    pub fn as_ptr(&self) -> *mut spdk_nvmf_tgt {
+        self.tgt.as_ptr()
+    }
+
     pub async fn init_poll_groups(&self) {
         //NVMF_TARGET.get().unwrap().thread.enter();
         let mut waiter = Vec::new();
         Reactors::iter().for_each(|r| {
+            if r.core() == Cores::first() {
+                return;
+            }
             if let Some(t) = Mthread::new(
                 format!("mayastor_nvmf_tcp_pg_core_{}", r.core()),
                 r.core(),
@@ -155,6 +163,7 @@ impl NvmfTgt {
     }
 
     fn listen(&self) {
+        dbg!(Cores::current());
         let cfg = Config::get();
         let trid_nexus = TransportId::new(cfg.nexus_opts.nvmf_nexus_port);
         let mut opts = spdk_nvmf_listen_opts::default();
@@ -232,6 +241,10 @@ impl Service {
         thread.exit();
 
         NVMF_TARGET.get_or_init(|| service)
+    }
+
+    pub fn as_ptr(&self) -> *mut spdk_nvmf_tgt {
+        self.tgt.as_ptr()
     }
 
     pub async fn start(&self) {

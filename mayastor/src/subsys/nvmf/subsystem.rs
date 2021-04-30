@@ -47,6 +47,7 @@ use crate::{
     subsys::{
         nvmf::{transport::TransportId, Error, NVMF_TGT},
         Config,
+        NVMF_TARGET,
     },
 };
 
@@ -86,10 +87,8 @@ impl IntoIterator for NvmfSubsystem {
     type IntoIter = NvmfSubsystemIterator;
 
     fn into_iter(self) -> Self::IntoIter {
-        NVMF_TGT.with(|t| {
-            NvmfSubsystemIterator(unsafe {
-                spdk_nvmf_subsystem_get_first(t.borrow().tgt.as_ptr())
-            })
+        NvmfSubsystemIterator(unsafe {
+            spdk_nvmf_subsystem_get_first(NVMF_TARGET.get().unwrap().as_ptr())
         })
     }
 }
@@ -144,23 +143,20 @@ impl NvmfSubsystem {
     /// create a new subsystem where the NQN is based on the UUID
     pub fn new(uuid: &str) -> Result<Self, Error> {
         let nqn = gen_nqn(uuid).into_cstring();
-        let ss = NVMF_TGT
-            .with(|t| {
-                let tgt = t.borrow().tgt.as_ptr();
-                unsafe {
-                    spdk_nvmf_subsystem_create(
-                        tgt,
-                        nqn.as_ptr(),
-                        SPDK_NVMF_SUBTYPE_NVME,
-                        1,
-                    )
-                }
-            })
-            .to_result(|_| Error::Subsystem {
-                source: Errno::EEXIST,
-                nqn: uuid.into(),
-                msg: "ss ptr is null".into(),
-            })?;
+        let tgt = NVMF_TARGET.get().unwrap().as_ptr();
+        let ss = unsafe {
+            spdk_nvmf_subsystem_create(
+                tgt,
+                nqn.as_ptr(),
+                SPDK_NVMF_SUBTYPE_NVME,
+                1,
+            )
+        }
+        .to_result(|_| Error::Subsystem {
+            source: Errno::EEXIST,
+            nqn: uuid.into(),
+            msg: "ss ptr is null".into(),
+        })?;
 
         // look closely, its a race car!
         let sn = CString::new("33' ~'~._`o##o>").unwrap();
@@ -581,17 +577,15 @@ impl NvmfSubsystem {
 
     /// Get the first subsystem within the system
     pub fn first() -> Option<NvmfSubsystem> {
-        NVMF_TGT.with(|t| {
-            let ss = unsafe {
-                spdk_nvmf_subsystem_get_first(t.borrow().tgt.as_ptr())
-            };
+        let ss = unsafe {
+            spdk_nvmf_subsystem_get_first(NVMF_TARGET.get().unwrap().as_ptr())
+        };
 
-            if ss.is_null() {
-                None
-            } else {
-                Some(NvmfSubsystem(NonNull::new(ss).unwrap()))
-            }
-        })
+        if ss.is_null() {
+            None
+        } else {
+            Some(NvmfSubsystem(NonNull::new(ss).unwrap()))
+        }
     }
 
     /// lookup a subsystem by its UUID
