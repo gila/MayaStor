@@ -11,7 +11,7 @@ struct Pg(*mut spdk_nvmf_poll_group);
 
 #[repr(C)]
 #[derive(Clone, Debug)]
-pub(crate) struct PollGroup {
+pub struct PollGroup {
     pub thread: Mthread,
     group: Pg,
 }
