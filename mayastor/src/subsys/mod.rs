@@ -103,7 +103,7 @@ impl NvmfTgt {
     }
 
     pub async fn init_poll_groups(&self) {
-        NVMF_TARGET.get().unwrap().thread.enter();
+        //NVMF_TARGET.get().unwrap().thread.enter();
         let mut waiter = Vec::new();
         Reactors::iter().for_each(|r| {
             if let Some(t) = Mthread::new(
@@ -119,8 +119,8 @@ impl NvmfTgt {
 
     async fn create_poll_group(tgt: *mut spdk_nvmf_tgt, mt: Mthread) {
         mt.with(|| {
-        let pg = PollGroup::new(tgt, mt);
-        NVMF_PGS.with(|p| p.borrow_mut().push(pg));
+            let pg = PollGroup::new(tgt, mt);
+            NVMF_PGS.with(|p| p.borrow_mut().push(pg));
         });
     }
 
@@ -282,11 +282,10 @@ impl Service {
             fn drop(&mut self) {
                 assert_eq!(Mthread::current().unwrap(), self.thread);
                 info!("running on {:?}", Mthread::current());
-
+                self.thread.exit();
                 unsafe {
                     ManuallyDrop::drop(&mut self.inner);
                 }
-
             }
         }
 

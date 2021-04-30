@@ -4,7 +4,7 @@ use std::{
     ptr::NonNull,
 };
 
-use futures::{Future, channel::oneshot::Receiver};
+use futures::{channel::oneshot::Receiver, Future};
 use nix::errno::Errno;
 
 use once_cell::sync::OnceCell;
@@ -35,7 +35,7 @@ use crate::{
             poll_groups::PollGroup,
             subsystem::NvmfSubsystem,
             transport,
-            transport::{get_ipv4_address},
+            transport::get_ipv4_address,
             Error,
             NVMF_PGS,
         },
@@ -401,8 +401,6 @@ impl Target {
         });
     }
 }
-
-
 
 //#[derive(Clone, Copy, Debug)]
 //struct NvmfTgt {

@@ -98,7 +98,7 @@ impl Nvmf {
         //    debug!("nvmf target disabled");
         //    unsafe { spdk_subsystem_init_next(0) }
         //}
-            unsafe { spdk_subsystem_init_next(0) }
+        unsafe { spdk_subsystem_init_next(0) }
     }
 
     extern "C" fn fini() {
