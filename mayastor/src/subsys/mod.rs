@@ -21,7 +21,6 @@ use crate::ffihelper::{
     done_errno_cb,
     AsStr,
     ErrnoResult,
-    FfiResult,
     IntoCString,
 };
 pub use nvmf::{

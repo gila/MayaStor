@@ -4,10 +4,10 @@ use std::{
     ptr::NonNull,
 };
 
-use futures::{channel::oneshot::Receiver, Future};
+
 use nix::errno::Errno;
 
-use once_cell::sync::OnceCell;
+
 use spdk_sys::{
     spdk_env_get_core_count,
     spdk_nvmf_listen_opts,

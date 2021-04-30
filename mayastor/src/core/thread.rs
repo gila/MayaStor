@@ -15,7 +15,7 @@ use spdk_sys::{
 };
 
 use crate::core::{cpu_cores::CpuMask, CoreError, Cores, Reactors};
-use core::marker::PhantomData;
+
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use nix::errno::Errno;
 use std::{
