@@ -152,7 +152,6 @@ impl NvmfTgt {
         };
 
         let _result = r.await.unwrap();
-
         debug!("Added TCP nvmf transport");
     }
 
