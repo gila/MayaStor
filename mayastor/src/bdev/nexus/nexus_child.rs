@@ -142,7 +142,6 @@ impl Display for ChildState {
 pub struct NexusChild {
     /// name of the parent this child belongs too
     parent: String,
-
     /// current state of the child
     #[serde(skip_serializing)]
     pub state: AtomicCell<ChildState>,
@@ -150,7 +149,6 @@ pub struct NexusChild {
     #[serde(skip_serializing)]
     pub prev_state: AtomicCell<ChildState>,
     #[serde(skip_serializing)]
-    remove_channel: (mpsc::Sender<()>, mpsc::Receiver<()>),
     pub guid: Guid,
     pub metadata_index_lba: u64,
     /// Name of the child is the URI used to create it.
@@ -160,6 +158,7 @@ pub struct NexusChild {
     /// Underlying block device.
     device: Option<Box<dyn BlockDevice>>,
     #[serde(skip_serializing)]
+    /// descriptor for the underlying block device
     device_descriptor: Option<Box<dyn BlockDeviceDescriptor>>,
 }
 
@@ -293,7 +292,7 @@ impl NexusChild {
     /// Fault the child with a specific reason.
     /// We do not close the child if it is out-of-sync because it will
     /// subsequently be rebuilt.
-    pub(crate) async fn fault(&mut self, reason: Reason) {
+    pub(crate) async fn fault(&self, reason: Reason) {
         match reason {
             Reason::OutOfSync => {
                 self.set_state(ChildState::Faulted(reason));
@@ -392,7 +391,7 @@ impl NexusChild {
     }
 
     /// Close the nexus child.
-    pub(crate) async fn close(&mut self) -> Result<(), NexusBdevError> {
+    pub(crate) async fn close(&self) -> Result<(), NexusBdevError> {
         info!("{}: closing nexus child", self.name);
         if self.device.is_none() {
             info!("{}: nexus child already closed", self.name);
@@ -406,15 +405,6 @@ impl NexusChild {
 
         // Destruction raises a device removal event.
         let destroyed = self.destroy().await;
-
-        // Only wait for block device removal if the child has been initialised.
-        // An uninitialized child won't have an underlying devices.
-        // Also check previous state as remove event may not have occurred.
-        if self.state.load() != ChildState::Init
-            && self.prev_state.load() != ChildState::Init
-        {
-            self.remove_channel.1.next().await;
-        }
 
         info!("{}: nexus child closed", self.name);
         destroyed
@@ -481,22 +471,7 @@ impl NexusChild {
             self.device_descriptor.take();
         }
 
-        self.remove_complete();
         info!("Child {} removed", self.name);
-    }
-
-    /// Signal that the child removal is complete.
-    fn remove_complete(&self) {
-        let mut sender = self.remove_channel.0.clone();
-        let name = self.name.clone();
-        Reactors::current().send_future(async move {
-            if let Err(e) = sender.send(()).await {
-                error!(
-                    "Failed to send remove complete for child {}, error {}",
-                    name, e
-                );
-            }
-        });
     }
 
     /// create a new nexus child
@@ -512,7 +487,6 @@ impl NexusChild {
             device_descriptor: None,
             state: AtomicCell::new(ChildState::Init),
             prev_state: AtomicCell::new(ChildState::Init),
-            remove_channel: mpsc::channel(0),
             guid: Guid::from(uuid::Uuid::nil()),
             metadata_index_lba: 0,
         }

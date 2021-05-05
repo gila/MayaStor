@@ -52,7 +52,7 @@ mkShell {
     pkg-config
     pre-commit
     procps
-    python3
+    (python3.withPackages (ps: with ps; [ grpcio grpcio-tools ]))
     utillinux
     xfsprogs
   ]
