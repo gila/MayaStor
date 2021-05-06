@@ -1,3 +1,4 @@
 pytest-docker-compose
 grpcio-tools
 autopep8
+urllib

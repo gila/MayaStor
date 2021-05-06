@@ -171,27 +171,24 @@ impl mayastor_server::Mayastor for MayastorSvc {
         &self,
         request: Request<CreateReplicaRequest>,
     ) -> GrpcResult<Replica> {
+        let rx = rpc_submit(async move {
         let args = request.into_inner();
         if Lvs::lookup(&args.pool).is_none() {
-            return Err(Status::not_found(args.pool));
+            return Err(LvsError::Invalid{ source: Errno::EINVAL, msg: "Pool does not exist".into()})
         }
 
         if let Some(b) = Bdev::lookup_by_name(&args.uuid) {
             let lvol = Lvol::try_from(b)?;
-            return Ok(Response::new(Replica::from(lvol)));
+            return Ok(Replica::from(lvol))
         }
 
         if !matches!(
             Protocol::try_from(args.share)?,
             Protocol::Off | Protocol::Nvmf
         ) {
-            return Err(Status::invalid_argument(format!(
-                "invalid protocol {}",
-                args.share
-            )));
+            return Err(LvsError::ReplicaShareProtocol{ value: args.share})
         }
 
-        let rx = rpc_submit(async move {
             let p = Lvs::lookup(&args.pool).unwrap();
             match p.create_lvol(&args.uuid, args.size, false).await {
                 Ok(lvol)

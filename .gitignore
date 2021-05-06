@@ -14,3 +14,4 @@ test-yamls/*
 /node_modules
 artifacts/
 .idea
+**/__pycache__
