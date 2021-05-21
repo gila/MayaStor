@@ -17,7 +17,7 @@ use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
 
-use crate::core::IoDevice;
+use crate::{bdev::nexus::nexus_io::NexusBio, core::IoDevice};
 
 use rpc::mayastor::NvmeAnaState;
 use spdk_sys::{spdk_bdev, spdk_bdev_register, spdk_bdev_unregister};
@@ -329,7 +329,7 @@ pub struct Nexus {
     /// raw pointer to bdev (to destruct it later using Box::from_raw())
     bdev_raw: *mut spdk_bdev,
     /// represents the current state of the Nexus
-    pub(super) state: std::sync::Mutex<NexusState>,
+    pub(super) state: parking_lot::Mutex<NexusState>,
     /// the offset in num blocks where the data partition starts
     pub data_ent_offset: u64,
     /// the handle to be used when sharing the nexus, this allows for the bdev
@@ -365,6 +365,8 @@ pub enum NexusState {
     Closed,
     /// open
     Open,
+    ///
+    Retiring,
 }
 
 impl ToString for NexusState {
@@ -373,6 +375,7 @@ impl ToString for NexusState {
             NexusState::Init => "init",
             NexusState::Closed => "closed",
             NexusState::Open => "open",
+            NexusState::Retiring => "retire in progress",
         }
         .parse()
         .unwrap()
@@ -428,6 +431,17 @@ fn update_failfast_cb(
         "{}: fail-fast counter transition: {} -> {}",
         ctx.nexus, old_value, channel.fail_fast
     );
+
+
+    channel.refresh();
+
+    channel.queue.iter().for_each(|b| {
+            let mut b = NexusBio::from(*b);
+            b.fail_checked();
+    });
+
+    channel.queue.clear();
+
     0
 }
 
@@ -464,7 +478,7 @@ impl Nexus {
             child_count: 0,
             children: Vec::new(),
             bdev: Bdev::from(&*b as *const _ as *mut spdk_bdev),
-            state: std::sync::Mutex::new(NexusState::Init),
+            state: parking_lot::Mutex::new(NexusState::Init),
             bdev_raw: Box::into_raw(b),
             data_ent_offset: 0,
             share_handle: None,
@@ -526,7 +540,7 @@ impl Nexus {
             "{} Transitioned state from {:?} to {:?}",
             self.name, self.state, state
         );
-        *self.state.lock().unwrap() = state;
+        *self.state.lock() = state;
         state
     }
     /// returns the size in bytes of the nexus instance
@@ -596,7 +610,7 @@ impl Nexus {
     pub(crate) fn destruct(&mut self) -> NexusState {
         // a closed operation might already be in progress calling unregister
         // will trip an assertion within the external libraries
-        if *self.state.lock().unwrap() == NexusState::Closed {
+        if *self.state.lock() == NexusState::Closed {
             trace!("{}: already closed", self.name);
             return NexusState::Closed;
         }
@@ -863,7 +877,7 @@ impl Nexus {
     /// creation. Once this function is called, the device is visible and can
     /// be used for IO.
     pub(crate) async fn register(&mut self) -> Result<(), Error> {
-        assert_eq!(*self.state.lock().unwrap(), NexusState::Init);
+        assert_eq!(*self.state.lock(), NexusState::Init);
 
         let io_device = IoDevice::new::<NexusChannel>(
             NonNull::new(self.as_ptr()).unwrap(),
@@ -937,10 +951,10 @@ impl Nexus {
     /// No child is online so the nexus is faulted
     /// This may be made more configurable in the future
     pub fn status(&self) -> NexusStatus {
-        match *self.state.lock().unwrap() {
+        match *self.state.lock() {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
-            NexusState::Open => {
+            NexusState::Open | NexusState::Retiring=> {
                 if self
                     .children
                     .iter()

@@ -16,8 +16,10 @@ use spdk_sys::{
 
 use crate::{
     bdev::{nexus::nexus_child::ChildState, Nexus, Reason},
-    core::{BlockDeviceHandle, Mthread},
+    core::{BlockDeviceHandle, Cores, Mthread},
 };
+
+use super::nexus_io::NexusBio;
 
 /// io channel, per core
 #[repr(C)]
@@ -32,6 +34,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
+    pub(crate) queue: Vec<*mut spdk_sys::spdk_bdev_io>,
     device: *mut c_void,
 }
 
@@ -99,6 +102,48 @@ impl NexusChannelInner {
             }
             Some(self.previous)
         }
+    }
+
+    pub fn remove_child(&mut self, name: &str) -> bool {
+//        self.previous = 0;
+//        self.failing = true;
+        let nexus = unsafe { Nexus::from_raw(self.device) };
+//        info!(
+//            ?name,
+//            "core: {} thread: {} removing from channels",
+//            Cores::current(),
+//            Mthread::current().unwrap().name()
+//        );
+//        info!(
+//            "{}: Current number of IO channels write: {} read: {}",
+//            nexus.name,
+//            self.writers.len(),
+//            self.readers.len(),
+//        );
+//        self.readers
+//            .retain(|c| c.get_device().device_name() != name);
+//        self.writers
+//            .retain(|c| c.get_device().device_name() != name);
+//
+//        info!(
+//            "{}: New number of IO channels write:{} read:{} out of {} children",
+//            nexus.name,
+//            self.writers.len(),
+//            self.readers.len(),
+//            nexus.children.len()
+//        );
+//
+       nexus
+           .children
+           .iter()
+           .filter(|c|  dbg!(c.get_device().as_ref().unwrap().device_name()  == name) )
+           .any(|c| {
+               ChildState::Open
+                   == c.state.compare_and_swap(
+                       ChildState::Open,
+                       ChildState::Faulted(Reason::IoError),
+                   )
+           })
     }
 
     /// refreshing our channels simply means that we either have a child going
@@ -187,6 +232,8 @@ impl NexusChannel {
             previous: 0,
             device,
             fail_fast: 0,
+            queue: Vec::new(),
+
         });
 
         nexus

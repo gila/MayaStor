@@ -390,9 +390,12 @@ pub struct NvmeControllerIoChannel(NonNull<spdk_io_channel>);
 
 extern "C" fn disconnected_qpair_cb(
     qpair: *mut spdk_nvme_qpair,
-    _ctx: *mut c_void,
+    ctx: *mut c_void,
 ) {
+    let inner = NvmeIoChannel::from_raw(ctx).inner_mut();
+
     warn!(?qpair, "NVMe qpair disconnected");
+    inner.poller.pause();
 
     // Currently, just try to reconnect indefinitely. If we are doing a
     // reset, the reset will reconnect a qpair, and we will stop getting a
