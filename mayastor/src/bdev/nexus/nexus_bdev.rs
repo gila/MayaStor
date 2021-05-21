@@ -437,7 +437,7 @@ fn update_failfast_cb(
 
     channel.queue.iter().for_each(|b| {
             let mut b = NexusBio::from(*b);
-            b.fail_checked();
+            b.retry_checked();
     });
 
     channel.queue.clear();

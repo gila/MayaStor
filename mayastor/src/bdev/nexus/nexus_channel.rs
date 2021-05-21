@@ -104,6 +104,38 @@ impl NexusChannelInner {
         }
     }
 
+    pub fn remove_child_in_submit(&mut self, name: &str) {
+//        self.previous = 0;
+//        self.failing = true;
+        let nexus = unsafe { Nexus::from_raw(self.device) };
+        info!(
+            ?name,
+            "core: {} thread: {} removing from during submission channels",
+            Cores::current(),
+            Mthread::current().unwrap().name()
+        );
+        info!(
+            "{}: Current number of IO channels write: {} read: {}",
+            nexus.name,
+            self.writers.len(),
+            self.readers.len(),
+        );
+        self.readers
+            .retain(|c| c.get_device().device_name() != name);
+        self.writers
+            .retain(|c| c.get_device().device_name() != name);
+
+        info!(
+            "{}: New number of IO channels write:{} read:{} out of {} children",
+            nexus.name,
+            self.writers.len(),
+            self.readers.len(),
+            nexus.children.len()
+        );
+        self.remove_child(name);
+       
+    }
+
     pub fn remove_child(&mut self, name: &str) -> bool {
 //        self.previous = 0;
 //        self.failing = true;

@@ -226,7 +226,7 @@ impl NexusBio {
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().submission_failure {
-                self.fail();
+                self.retry_checked();
             } else {
                 self.ok();
             }
@@ -457,6 +457,8 @@ impl NexusBio {
                 device, result,
             );
             self.ctx_as_mut().submission_failure = true;
+            self.inner_channel().remove_child_in_submit(&device);
+            self.do_retire(device);
         }
 
         if inflight != 0 {
