@@ -11,17 +11,13 @@ use spdk_sys::{spdk_bdev_io, spdk_bdev_io_get_buf, spdk_io_channel};
 
 use crate::{
     bdev::{
-        device_destroy,
         nexus::{
             nexus_bdev::NEXUS_PRODUCT_ID,
-            nexus_channel::{DrEvent, NexusChannel, NexusChannelInner},
+            nexus_channel::{NexusChannel, NexusChannelInner},
         },
         nexus_lookup,
-        ChildState,
         Nexus,
-        NexusState,
         NexusStatus,
-        Reason,
     },
     core::{
         Bio,
@@ -35,7 +31,6 @@ use crate::{
         IoType,
         Mthread,
         NvmeCommandStatus,
-        Reactor,
         Reactors,
     },
 };
@@ -85,7 +80,6 @@ impl From<*mut spdk_bdev_io> for NexusBio {
 }
 
 impl NexusBio {
-
     fn as_ptr(&self) -> *mut spdk_bdev_io {
         self.0.as_ptr()
     }
@@ -103,22 +97,12 @@ pub struct NioCtx {
     submission_failure: bool,
 }
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-enum Disposition {
-    /// All IOs are completed, and the final status of the IO should be set to
-    /// the enum variant
-    Complete(IoStatus),
-    /// IOs are still in flight status of the last IO that failed
-    Flying(IoStatus),
-    /// retire the current child
-    Retire(IoStatus),
-}
-
 pub(crate) fn nexus_submit_io(mut io: NexusBio) {
     // Fail-fast all incoming I/O if the flag is set.
-    let inner = io.inner_channel();
-    if inner.fail_fast > 0 {
+    let channel = io.inner_channel();
+
+    if channel.fail_fast > 0 {
+        warn!("in fail fast during submission");
         return;
     }
 
@@ -210,19 +194,21 @@ impl NexusBio {
         // decrement the counter of in flight IO
         self.ctx_as_mut().in_flight -= 1;
 
-        // record the state of at least one of the IO's.
         if success {
             self.ctx_as_mut().num_ok += 1;
-            return self.ok_checked();
+            self.ok_checked();
         } else {
             // IO failure, mark the IO failed and taka the child out
             info!(?self, "{} failed IO", child.device_name());
             self.ctx_as_mut().status = IoStatus::Failed;
             self.ctx_as_mut().must_fail = true;
-            return self.handle_failure(child, status);
+            self.handle_failure(child, status);
         }
     }
 
+    /// Complete the IO marking at as succesfull when all child IO's have been
+    /// accounted for. Failing to account for all child IO's will result in
+    /// a lockup.
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().submission_failure {
@@ -233,16 +219,25 @@ impl NexusBio {
         }
     }
 
+    /// Complete the IO marking it as failed.
     pub fn fail_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             self.fail();
         }
     }
 
+    /// retry this IO
     pub fn retry_checked(&mut self) {
         if self.ctx().in_flight == 0 {
-            let bio = unsafe { Self::nexus_bio_setup( self.ctx().channel.as_ptr(), self.as_ptr()) };
+            let bio = unsafe {
+                Self::nexus_bio_setup(
+                    self.ctx().channel.as_ptr(),
+                    self.as_ptr(),
+                )
+            };
             nexus_submit_io(bio);
+        } else {
+            error!(?self, "resubmitted with inflight IO's");
         }
     }
 
@@ -411,17 +406,16 @@ impl NexusBio {
     /// be submitted to all the underlying children.
     fn submit_all(&mut self) -> Result<(), CoreError> {
         let mut inflight = 0;
-        let mut status = IoStatus::Pending;
         // Name of the device which experiences I/O submission failures.
         let mut failed_device = None;
 
-        let cmd = self.cmd();
+        // stops at first error
         let result = self.inner_channel().writers.iter().try_for_each(|h| {
-            match cmd {
-                IoType::Write => self.submit_write(&**h),
-                IoType::Unmap => self.submit_unmap(&**h),
-                IoType::WriteZeros => self.submit_write_zeroes(&**h),
-                IoType::Reset => self.submit_reset(&**h),
+            match self.cmd() {
+                IoType::Write => self.submit_write(h.as_ref()),
+                IoType::Unmap => self.submit_unmap(h.as_ref()),
+                IoType::WriteZeros => self.submit_write_zeroes(h.as_ref()),
+                IoType::Reset => self.submit_reset(h.as_ref()),
                 // we should never reach here, if we do it is a bug.
                 _ => unreachable!(),
             }
@@ -429,7 +423,6 @@ impl NexusBio {
                 inflight += 1;
             })
             .map_err(|se| {
-                status = IoStatus::Failed;
                 error!(
                     "core: {} thread: {},IO submission  failed with error {:?}, I/Os submitted: {}",
                     Cores::current(), Mthread::current().unwrap().name(), se, inflight
@@ -456,17 +449,20 @@ impl NexusBio {
                 "{}: retiring device in response to submission error={:?}",
                 device, result,
             );
+
+            // set the IO as failed in the submission stage.
             self.ctx_as_mut().submission_failure = true;
             self.inner_channel().remove_child_in_submit(&device);
             self.do_retire(device);
         }
 
         if inflight != 0 {
+            // An error was experienced during submission.
             self.ctx_as_mut().in_flight = inflight;
+            self.fail_checked();
         } else {
-            // if no IO was submitted at all, we can fail the IO now.
-            // TODO: Support of IoStatus::NoMemory in ENOMEM-related errors.
-            self.fail();
+            // we have failed to submit IO because there are no usable writers
+            self.fail_checked();
         }
         result
     }
@@ -483,14 +479,12 @@ impl NexusBio {
         child: &dyn BlockDevice,
         status: IoCompletionStatus,
     ) {
-        // we have experienced a failure on one of the child devices. We need to
+        // We have experienced a failure on one of the child devices. We need to
         // ensure we do not submit more IOs to this child. We do not need to
         // tell other cores about this because they will experience the
-        // same errors on their own channels.
-
-        // no new IO can be submitted to this child, it is, however still
-        // present and may have pending IO in its queue.
+        // same errors on their own channels, and handle it on their own.
         //
+        // We differentiate between errors in the submission and completion.
 
         trace!(?status);
 
@@ -507,39 +501,20 @@ impl NexusBio {
                 return;
             }
         }
-        let needs_retire =
-            self.inner_channel().remove_child(&child.device_name());
 
+        // Fault the child -- removing a bad having child from the group
+        // and have it "sit and think" seems to work reasonable.
+        let needs_retire =
+            self.inner_channel().fault_child(&child.device_name());
+
+        // The child state was not faulted yet, so this is the first IO
+        // to this child for which we encounterd an error.
         if needs_retire {
             info!("need retire!");
             self.do_retire(child.device_name());
         }
 
         self.retry_checked();
-    }
-
-    fn try_retire(
-        &mut self,
-        child: &dyn BlockDevice,
-        status: IoCompletionStatus,
-    ) {
-        trace!(?status);
-
-        if let IoCompletionStatus::NvmeError(nvme_status) = status {
-            if nvme_status
-                == NvmeCommandStatus::GenericCommandStatus(
-                    GenericStatusCode::InvalidOpcode,
-                )
-            {
-                info!(
-                        "Device {} experienced invalid opcode error: retiring skipped",
-                        child.device_name()
-                    );
-                return;
-            }
-        }
-        info!("{} try_retire() called", child.device_name());
-        self.do_retire(child.device_name());
     }
 
     /// Retire a child for this nexus.
@@ -554,13 +529,14 @@ impl NexusBio {
                 );
 
                 // Pausing a nexus acts like entering a critical
-                // section,
-                // allowing only one retire request to run at a
-                // time, which prevents
-                // inconsistency in reading/updating nexus
+                // section allowing only one retire request to run at a
+                // time, which prevents  inconsistency in reading/updating nexus
                 // configuration.
+
                 nexus.pause().await.unwrap();
                 nexus.set_failfast().await.unwrap();
+
+                // Lookup child once more and finally remove it.
                 match nexus.child_lookup(&device) {
                     Some(child) => {
                         // TODO: an error can occur here if a
@@ -575,13 +551,9 @@ impl NexusBio {
                         }
                     }
                     None => {
-                        warn!(
-                                        "{} no longer belongs to nexus {}, skipping child removal",
-                                        device, nexus
-                                    );
+                        warn!("{} no longer belongs to nexus {}, skipping child removal", device, nexus);
                     }
                 }
-                // Lookup child once more and finally remove it.
 
                 nexus.clear_failfast().await.unwrap();
                 nexus.resume().await.unwrap();

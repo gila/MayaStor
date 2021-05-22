@@ -17,7 +17,7 @@ use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 use tonic::{Code, Status};
 
-use crate::{bdev::nexus::nexus_io::NexusBio, core::IoDevice};
+use crate::core::IoDevice;
 
 use rpc::mayastor::NvmeAnaState;
 use spdk_sys::{spdk_bdev, spdk_bdev_register, spdk_bdev_unregister};
@@ -365,8 +365,6 @@ pub enum NexusState {
     Closed,
     /// open
     Open,
-    ///
-    Retiring,
 }
 
 impl ToString for NexusState {
@@ -375,7 +373,6 @@ impl ToString for NexusState {
             NexusState::Init => "init",
             NexusState::Closed => "closed",
             NexusState::Open => "open",
-            NexusState::Retiring => "retire in progress",
         }
         .parse()
         .unwrap()
@@ -432,16 +429,7 @@ fn update_failfast_cb(
         ctx.nexus, old_value, channel.fail_fast
     );
 
-
     channel.refresh();
-
-    channel.queue.iter().for_each(|b| {
-            let mut b = NexusBio::from(*b);
-            b.retry_checked();
-    });
-
-    channel.queue.clear();
-
     0
 }
 
@@ -954,7 +942,7 @@ impl Nexus {
         match *self.state.lock() {
             NexusState::Init => NexusStatus::Degraded,
             NexusState::Closed => NexusStatus::Faulted,
-            NexusState::Open | NexusState::Retiring=> {
+            NexusState::Open => {
                 if self
                     .children
                     .iter()

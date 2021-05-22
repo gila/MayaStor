@@ -39,16 +39,12 @@ impl From<Bdev> for RpcBdev {
 }
 
 #[derive(Debug)]
-pub struct BdevSvc {
-    busy: tokio::sync::Mutex<bool>,
-}
+pub struct BdevSvc {}
 
 impl BdevSvc {
-  pub fn new() -> Self {
-        Self {
-            busy: tokio::sync::Mutex::new(false),
-        }
-   }
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
 impl Default for BdevSvc {
@@ -61,7 +57,6 @@ impl Default for BdevSvc {
 impl BdevRpc for BdevSvc {
     #[instrument(level = "debug", err)]
     async fn list(&self, _request: Request<Null>) -> GrpcResult<Bdevs> {
-        let guard = self.busy.lock().await;
         let rx = rpc_submit::<_, _, NexusBdevError>(async {
             let mut list: Vec<RpcBdev> = Vec::new();
             if let Some(bdev) = Bdev::bdev_first() {
@@ -84,7 +79,6 @@ impl BdevRpc for BdevSvc {
         &self,
         request: Request<BdevUri>,
     ) -> Result<Response<CreateReply>, Status> {
-        let guard = self.busy.lock().await;
         let uri = request.into_inner().uri;
 
         let rx = rpc_submit(async move { bdev_create(&uri).await })?;
@@ -101,7 +95,6 @@ impl BdevRpc for BdevSvc {
 
     #[instrument(level = "debug", err)]
     async fn destroy(&self, request: Request<BdevUri>) -> GrpcResult<Null> {
-        let guard = self.busy.lock().await;
         let uri = request.into_inner().uri;
 
         let rx = rpc_submit(async move { bdev_destroy(&uri).await })?;
@@ -117,7 +110,6 @@ impl BdevRpc for BdevSvc {
         &self,
         request: Request<BdevShareRequest>,
     ) -> Result<Response<BdevShareReply>, Status> {
-        let guard = self.busy.lock().await;
         let r = request.into_inner();
         let name = r.name;
         let proto = r.proto;
@@ -160,7 +152,6 @@ impl BdevRpc for BdevSvc {
 
     #[instrument(level = "debug", err)]
     async fn unshare(&self, request: Request<CreateReply>) -> GrpcResult<Null> {
-        let guard = self.busy.lock().await;
         let rx = rpc_submit::<_, _, CoreError>(async {
             let name = request.into_inner().name;
             if let Some(bdev) = Bdev::lookup_by_name(&name) {

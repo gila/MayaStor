@@ -19,8 +19,6 @@ use crate::{
     core::{BlockDeviceHandle, Cores, Mthread},
 };
 
-use super::nexus_io::NexusBio;
-
 /// io channel, per core
 #[repr(C)]
 #[derive(Debug)]
@@ -34,7 +32,7 @@ pub(crate) struct NexusChannelInner {
     pub(crate) readers: Vec<Box<dyn BlockDeviceHandle>>,
     pub(crate) previous: usize,
     pub(crate) fail_fast: u32,
-    pub(crate) queue: Vec<*mut spdk_sys::spdk_bdev_io>,
+    in_submit: bool,
     device: *mut c_void,
 }
 
@@ -104,17 +102,16 @@ impl NexusChannelInner {
         }
     }
 
+    /// Remove a child from the readers and/or writers
     pub fn remove_child_in_submit(&mut self, name: &str) {
-//        self.previous = 0;
-//        self.failing = true;
         let nexus = unsafe { Nexus::from_raw(self.device) };
-        info!(
+        trace!(
             ?name,
             "core: {} thread: {} removing from during submission channels",
             Cores::current(),
             Mthread::current().unwrap().name()
         );
-        info!(
+        trace!(
             "{}: Current number of IO channels write: {} read: {}",
             nexus.name,
             self.writers.len(),
@@ -125,60 +122,42 @@ impl NexusChannelInner {
         self.writers
             .retain(|c| c.get_device().device_name() != name);
 
-        info!(
+        trace!(
             "{}: New number of IO channels write:{} read:{} out of {} children",
             nexus.name,
             self.writers.len(),
             self.readers.len(),
             nexus.children.len()
         );
-        self.remove_child(name);
-       
+        self.fault_child(name);
     }
 
-    pub fn remove_child(&mut self, name: &str) -> bool {
-//        self.previous = 0;
-//        self.failing = true;
+    pub fn fault_child(&mut self, name: &str) -> bool {
         let nexus = unsafe { Nexus::from_raw(self.device) };
-//        info!(
-//            ?name,
-//            "core: {} thread: {} removing from channels",
-//            Cores::current(),
-//            Mthread::current().unwrap().name()
-//        );
-//        info!(
-//            "{}: Current number of IO channels write: {} read: {}",
-//            nexus.name,
-//            self.writers.len(),
-//            self.readers.len(),
-//        );
-//        self.readers
-//            .retain(|c| c.get_device().device_name() != name);
-//        self.writers
-//            .retain(|c| c.get_device().device_name() != name);
-//
-//        info!(
-//            "{}: New number of IO channels write:{} read:{} out of {} children",
-//            nexus.name,
-//            self.writers.len(),
-//            self.readers.len(),
-//            nexus.children.len()
-//        );
-//
-       nexus
-           .children
-           .iter()
-           .filter(|c|  dbg!(c.get_device().as_ref().unwrap().device_name()  == name) )
-           .any(|c| {
-               ChildState::Open
-                   == c.state.compare_and_swap(
-                       ChildState::Open,
-                       ChildState::Faulted(Reason::IoError),
-                   )
-           })
+        nexus
+            .children
+            .iter()
+            .filter(|c| {
+                // If there where previous retires, we do not have a referece
+                // to a BlockDevice. We do however, know it cant be the device
+                // we are attempting to retire in the first place so this
+                // condition is fine.
+                if let Ok(child) = c.get_device().as_ref() {
+                    return child.device_name() == name;
+                } else {
+                    false
+                }
+            })
+            .any(|c| {
+                ChildState::Open
+                    == c.state.compare_and_swap(
+                        ChildState::Open,
+                        ChildState::Faulted(Reason::IoError),
+                    )
+            })
     }
 
-    /// refreshing our channels simply means that we either have a child going
+    /// Refreshing our channels simply means that we either have a child going
     /// online or offline. We don't know which child has gone, or was added, so
     /// we simply put back all the channels, and reopen the bdevs that are in
     /// the online state.
@@ -264,8 +243,7 @@ impl NexusChannel {
             previous: 0,
             device,
             fail_fast: 0,
-            queue: Vec::new(),
-
+            in_submit: false,
         });
 
         nexus
