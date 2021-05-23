@@ -395,7 +395,8 @@ extern "C" fn disconnected_qpair_cb(
     let inner = NvmeIoChannel::from_raw(ctx).inner_mut();
 
     warn!(?qpair, "NVMe qpair disconnected");
-    inner.poller.pause();
+    inner.shutdown();
+    return;
 
     // Currently, just try to reconnect indefinitely. If we are doing a
     // reset, the reset will reconnect a qpair, and we will stop getting a

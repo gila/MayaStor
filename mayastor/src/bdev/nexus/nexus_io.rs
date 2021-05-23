@@ -6,7 +6,7 @@ use std::{
 
 use libc::c_void;
 use nix::errno::Errno;
-
+use tracing::instrument;
 use spdk_sys::{spdk_bdev_io, spdk_bdev_io_get_buf, spdk_io_channel};
 
 use crate::{
@@ -31,6 +31,7 @@ use crate::{
         IoType,
         Mthread,
         NvmeCommandStatus,
+        Reactor,
         Reactors,
     },
 };
@@ -130,7 +131,7 @@ pub(crate) fn nexus_submit_io(mut io: NexusBio) {
             })
         }
     } {
-        error!(?e, ?io, "Error during IO submission");
+//        error!(?e, ?io, "Error during IO submission");
     }
 }
 
@@ -308,7 +309,9 @@ impl NexusBio {
                     "{} initiating retire in response to READ submission error",
                     hdl.get_device().device_name(),
                 );
-                self.do_retire(hdl.get_device().device_name());
+
+                inner.remove_child_in_submit(&hdl.get_device().device_name());
+                self.fail();
             } else {
                 self.ctx_as_mut().in_flight += 1;
             }
@@ -452,13 +455,17 @@ impl NexusBio {
 
             // set the IO as failed in the submission stage.
             self.ctx_as_mut().submission_failure = true;
-            self.inner_channel().remove_child_in_submit(&device);
-            self.do_retire(device);
+            let need_retire =
+                self.inner_channel().remove_child_in_submit(&device);
+           if need_retire {
+                self.do_retire(device);
+            }
         }
 
         if inflight != 0 {
             // An error was experienced during submission.
             self.ctx_as_mut().in_flight = inflight;
+            self.ctx_as_mut().status = IoStatus::Success; 
             self.fail_checked();
         } else {
             // we have failed to submit IO because there are no usable writers
@@ -468,10 +475,13 @@ impl NexusBio {
     }
 
     fn do_retire(&self, child: String) {
-        Reactors::master().send_future(Self::child_retire(
-            self.nexus_as_ref().name.clone(),
-            child,
-        ));
+        let nexus = self.nexus_as_ref().name.clone();
+        Reactors::master().send_future(async move {
+            Reactor::block_on(Self::child_retire(
+                nexus,
+                child.clone(),
+            ));
+        });
     }
 
     fn handle_failure(
@@ -514,10 +524,15 @@ impl NexusBio {
             self.do_retire(child.device_name());
         }
 
-        self.retry_checked();
+        if self.inner_channel().writers.is_empty() || self.inner_channel().readers.is_empty() {
+            self.fail_checked();
+        } else {
+            self.retry_checked();
+        }
     }
 
     /// Retire a child for this nexus.
+    #[instrument]
     async fn child_retire(nexus: String, device: String) {
         match nexus_lookup(&nexus) {
             Some(nexus) => {

@@ -103,7 +103,7 @@ impl NexusChannelInner {
     }
 
     /// Remove a child from the readers and/or writers
-    pub fn remove_child_in_submit(&mut self, name: &str) {
+    pub fn remove_child_in_submit(&mut self, name: &str) -> bool {
         let nexus = unsafe { Nexus::from_raw(self.device) };
         trace!(
             ?name,
@@ -129,7 +129,7 @@ impl NexusChannelInner {
             self.readers.len(),
             nexus.children.len()
         );
-        self.fault_child(name);
+        self.fault_child(name)
     }
 
     pub fn fault_child(&mut self, name: &str) -> bool {
@@ -137,6 +137,7 @@ impl NexusChannelInner {
         nexus
             .children
             .iter()
+            .filter(|c| c.state() == ChildState::Open)
             .filter(|c| {
                 // If there where previous retires, we do not have a referece
                 // to a BlockDevice. We do however, know it cant be the device

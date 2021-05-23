@@ -429,7 +429,7 @@ fn update_failfast_cb(
         ctx.nexus, old_value, channel.fail_fast
     );
 
-    channel.refresh();
+//    channel.refresh();
     0
 }
 

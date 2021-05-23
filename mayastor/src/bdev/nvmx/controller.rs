@@ -14,17 +14,7 @@ use merge::Merge;
 use nix::errno::Errno;
 use once_cell::sync::OnceCell;
 
-use spdk_sys::{
-    spdk_nvme_async_event_completion,
-    spdk_nvme_cpl,
-    spdk_nvme_ctrlr,
-    spdk_nvme_ctrlr_get_ns,
-    spdk_nvme_ctrlr_is_active_ns,
-    spdk_nvme_ctrlr_process_admin_completions,
-    spdk_nvme_ctrlr_register_aer_callback,
-    spdk_nvme_ctrlr_reset,
-    spdk_nvme_detach,
-};
+use spdk_sys::{spdk_nvme_async_event_completion, spdk_nvme_cpl, spdk_nvme_ctrlr, spdk_nvme_ctrlr_fail, spdk_nvme_ctrlr_get_ns, spdk_nvme_ctrlr_is_active_ns, spdk_nvme_ctrlr_process_admin_completions, spdk_nvme_ctrlr_register_aer_callback, spdk_nvme_ctrlr_reset, spdk_nvme_detach};
 
 use crate::{
     bdev::nvmx::{
@@ -794,11 +784,11 @@ pub extern "C" fn nvme_poll_adminq(ctx: *mut c_void) -> i32 {
     let mut context = NonNull::<TimeoutConfig>::new(ctx.cast())
         .expect("ctx pointer may never be null");
     let context = unsafe { context.as_mut() };
-
     let rc =
         unsafe { spdk_nvme_ctrlr_process_admin_completions(context.ctrlr) };
     if rc < 0 {
-        context.reset_controller();
+      //  unsafe { spdk_nvme_ctrlr_fail(context.ctrlr) };
+       // context.reset_controller();
     }
 
     if rc == 0 {
