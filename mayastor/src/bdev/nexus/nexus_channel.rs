@@ -131,7 +131,9 @@ impl NexusChannelInner {
         );
         self.fault_child(name)
     }
+    
 
+    /// Fault the child by marking its status. 
     pub fn fault_child(&mut self, name: &str) -> bool {
         let nexus = unsafe { Nexus::from_raw(self.device) };
         nexus

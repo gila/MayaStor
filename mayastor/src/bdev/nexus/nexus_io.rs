@@ -6,7 +6,6 @@ use std::{
 
 use libc::c_void;
 use nix::errno::Errno;
-use tracing::instrument;
 use spdk_sys::{spdk_bdev_io, spdk_bdev_io_get_buf, spdk_io_channel};
 
 use crate::{
@@ -93,7 +92,6 @@ pub struct NioCtx {
     num_ok: u8,
     status: IoStatus,
     channel: NonNull<spdk_io_channel>,
-    core: u32,
     must_fail: bool,
     submission_failure: bool,
 }
@@ -131,7 +129,7 @@ pub(crate) fn nexus_submit_io(mut io: NexusBio) {
             })
         }
     } {
-//        error!(?e, ?io, "Error during IO submission");
+        trace!(?e, ?io, "Error during IO submission");
     }
 }
 
@@ -145,7 +143,6 @@ impl NexusBio {
         let mut bio = NexusBio::from(io);
         let ctx = bio.ctx_as_mut();
         // for verification purposes when retiring a child
-        ctx.core = Cores::current();
         ctx.channel = NonNull::new(channel).unwrap();
         ctx.status = IoStatus::Pending;
         ctx.in_flight = 0;
@@ -189,7 +186,6 @@ impl NexusBio {
         child: &dyn BlockDevice,
         status: IoCompletionStatus,
     ) {
-        assert_eq!(self.ctx().core, Cores::current());
         let success = status == IoCompletionStatus::Success;
 
         // decrement the counter of in flight IO
@@ -200,7 +196,7 @@ impl NexusBio {
             self.ok_checked();
         } else {
             // IO failure, mark the IO failed and taka the child out
-            info!(?self, "{} failed IO", child.device_name());
+            info!(?self, "{} IO completion failed", child.device_name());
             self.ctx_as_mut().status = IoStatus::Failed;
             self.ctx_as_mut().must_fail = true;
             self.handle_failure(child, status);
@@ -238,6 +234,8 @@ impl NexusBio {
             };
             nexus_submit_io(bio);
         } else {
+            // we can not resubmit the IO now as there is an IO in flight
+            // the retry operation may be retried at a later stage.
             error!(?self, "resubmitted with inflight IO's");
         }
     }
@@ -457,7 +455,7 @@ impl NexusBio {
             self.ctx_as_mut().submission_failure = true;
             let need_retire =
                 self.inner_channel().remove_child_in_submit(&device);
-           if need_retire {
+            if need_retire {
                 self.do_retire(device);
             }
         }
@@ -465,7 +463,7 @@ impl NexusBio {
         if inflight != 0 {
             // An error was experienced during submission.
             self.ctx_as_mut().in_flight = inflight;
-            self.ctx_as_mut().status = IoStatus::Success; 
+            self.ctx_as_mut().status = IoStatus::Success;
             self.fail_checked();
         } else {
             // we have failed to submit IO because there are no usable writers
@@ -477,10 +475,7 @@ impl NexusBio {
     fn do_retire(&self, child: String) {
         let nexus = self.nexus_as_ref().name.clone();
         Reactors::master().send_future(async move {
-            Reactor::block_on(Self::child_retire(
-                nexus,
-                child.clone(),
-            ));
+            Reactor::block_on(Self::child_retire(nexus, child.clone()));
         });
     }
 
@@ -492,9 +487,13 @@ impl NexusBio {
         // We have experienced a failure on one of the child devices. We need to
         // ensure we do not submit more IOs to this child. We do not need to
         // tell other cores about this because they will experience the
-        // same errors on their own channels, and handle it on their own.
+        // same ekrors on their own channels, and handle it on their own.
         //
         // We differentiate between errors in the submission and completion.
+        // When we have a completion error, it typically means that the
+        // child has lost the connection to the nexus. In order for
+        // outstanding IO to complete, the IO's to that child must be
+        // aborted. The abortion is implicit when removing the device.
 
         trace!(?status);
 
@@ -512,19 +511,23 @@ impl NexusBio {
             }
         }
 
+        let child = child.device_name();
+
         // Fault the child -- removing a bad having child from the group
         // and have it "sit and think" seems to work reasonable.
         let needs_retire =
-            self.inner_channel().fault_child(&child.device_name());
+            self.inner_channel().fault_child(&child);
 
         // The child state was not faulted yet, so this is the first IO
         // to this child for which we encounterd an error.
         if needs_retire {
-            info!("need retire!");
-            self.do_retire(child.device_name());
+            self.do_retire(child);
         }
 
-        if self.inner_channel().writers.is_empty() || self.inner_channel().readers.is_empty() {
+        // if there are channels left -- retry the IO other wise fail the IO.
+        if self.inner_channel().writers.is_empty()
+            || self.inner_channel().readers.is_empty()
+        {
             self.fail_checked();
         } else {
             self.retry_checked();
@@ -532,12 +535,12 @@ impl NexusBio {
     }
 
     /// Retire a child for this nexus.
-    #[instrument]
     async fn child_retire(nexus: String, device: String) {
         match nexus_lookup(&nexus) {
             Some(nexus) => {
                 warn!(
-                    "core {} thread {:?}, faulting child {}",
+                    "nexus: {} core: {}, thread {:?}, faulting child {}",
+                    nexus,
                     Cores::current(),
                     Mthread::current(),
                     device,
@@ -549,7 +552,7 @@ impl NexusBio {
                 // configuration.
 
                 nexus.pause().await.unwrap();
-                nexus.set_failfast().await.unwrap();
+                //nexus.set_failfast().await.unwrap();
 
                 // Lookup child once more and finally remove it.
                 match nexus.child_lookup(&device) {
@@ -570,12 +573,14 @@ impl NexusBio {
                     }
                 }
 
-                nexus.clear_failfast().await.unwrap();
+                //nexus.clear_failfast().await.unwrap();
                 nexus.resume().await.unwrap();
 
                 if nexus.status() == NexusStatus::Faulted {
-                    error!(":{} has no children left... ", nexus);
+                    warn!(":{} has no children left... ", nexus);
                 }
+
+                info!("{}: retire of {} completed", nexus, device);
             }
 
             None => {

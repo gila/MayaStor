@@ -718,7 +718,7 @@ impl<'a> Drop for NvmeController<'a> {
             inner.adminq_poller.stop();
 
             assert_eq!(rc, 0, "Failed to detach NVMe controller");
-            debug!(
+            info!(
                 ?self.name,
                 "NVMe controller successfully detached"
             );
