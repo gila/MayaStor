@@ -277,7 +277,7 @@ impl Default for NvmeBdevOpts {
             high_priority_weight: 0,
             nvme_adminq_poll_period_us: try_from_env(
                 "NVME_ADMINQ_POLL_PERIOD_US",
-                10_000,
+                0,
             ),
             nvme_ioq_poll_period_us: try_from_env("NVME_IOQ_POLL_PERIOD_US", 0),
             io_queue_requests: 0,

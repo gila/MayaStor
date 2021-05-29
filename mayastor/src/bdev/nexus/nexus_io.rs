@@ -2,10 +2,12 @@ use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
     ptr::NonNull,
+    sync::atomic::Ordering,
 };
 
 use libc::c_void;
 use nix::errno::Errno;
+
 use spdk_sys::{spdk_bdev_io, spdk_bdev_io_get_buf, spdk_io_channel};
 
 use crate::{
@@ -38,7 +40,6 @@ use crate::{
         PAUSING,
     },
 };
-use std::sync::atomic::Ordering;
 
 #[allow(unused_macros)]
 macro_rules! offset_of {
@@ -215,12 +216,9 @@ impl NexusBio {
     fn ok_checked(&mut self) {
         if self.ctx().in_flight == 0 {
             if self.ctx().must_fail {
-                if self.inner_channel().writers.len() > 1 {
                     warn!(?self, "resubmitted due to must_fail");
-                    self.retry_checked();
-                } else {
+                    //self.retry_checked();
                     self.fail();
-                }
             } else {
                 self.ok();
             }
@@ -243,12 +241,13 @@ impl NexusBio {
                     self.as_ptr(),
                 )
             };
+            info!(?self, "resubmitting IO");
             nexus_submit_io(bio);
         } else {
             self.fail();
             // we can not resubmit the IO now as there is an IO in flight
             // the retry operation may be retried at a later stage.
-            error!(?self, "resubmitted with inflight IO's");
+            error!(?self, "resubmitted with inflight IO's, nvmf dnr?");
         }
     }
 
@@ -513,21 +512,31 @@ impl NexusBio {
         // outstanding IO to complete, the IO's to that child must be aborted.
         // The abortion is implicit when removing the device.
 
-        trace!(?status);
+        error!(?status);
 
-        if let IoCompletionStatus::NvmeError(nvme_status) = status {
-            if nvme_status
-                == NvmeCommandStatus::GenericCommandStatus(
-                    GenericStatusCode::InvalidOpcode,
+        if matches!(
+            status,
+            IoCompletionStatus::NvmeError(
+                NvmeCommandStatus::GenericCommandStatus(
+                    GenericStatusCode::InvalidOpcode
                 )
-            {
-                info!(
-                        "Device {} experienced invalid opcode error: retiring skipped",
-                        child.device_name()
-                    );
-                return;
-            }
+            )
+        ) {
+            info!(
+                "Device {} experienced invalid opcode error: retiring skipped",
+                child.device_name()
+            );
+            return;
         }
+
+        let retry = matches!(
+            status,
+            IoCompletionStatus::NvmeError(
+                NvmeCommandStatus::GenericCommandStatus(
+                    GenericStatusCode::AbortedSubmissionQueueDeleted
+                )
+            )
+        );
 
         let child = child.device_name();
 
@@ -539,6 +548,10 @@ impl NexusBio {
         // to this child for which we encountered an error.
         if needs_retire {
             self.do_retire(child);
+        }
+
+        if retry {
+            return self.ok_checked();
         }
 
         self.fail_checked();
@@ -570,7 +583,11 @@ impl NexusBio {
                         // inconsistency in reading/updating nexus
                         // configuration.
                         PAUSING.fetch_add(1, Ordering::SeqCst);
+                        tracing::info!("Before Reconfigure");
+                        nexus.child_retire(device.clone()).await.unwrap();
+                        tracing::info!("Before Pause");
                         nexus.pause().await.unwrap();
+                        tracing::info!("After Pause");
                         PAUSED.fetch_add(1, Ordering::SeqCst);
                         PAUSING.fetch_min(1, Ordering::SeqCst);
 
@@ -587,12 +604,12 @@ impl NexusBio {
                                 // separate task,
                                 // e.g. grpc request is also deleting the
                                 // child.
-                                //if let Err(err) = child.destroy().await {
-                                //    error!(
-                                //        "{}: destroying child {} failed {}",
-                                //        nexus, child, err
-                                //    );
-                                //}
+                                if let Err(err) = child.destroy().await {
+                                    error!(
+                                        "{}: destroying child {} failed {}",
+                                        nexus, child, err
+                                    );
+                                }
                             }
                             None => {
                                 warn!(

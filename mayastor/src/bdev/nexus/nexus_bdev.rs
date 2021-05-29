@@ -410,31 +410,14 @@ struct UpdateFailFastCtx {
     increment: bool,
     sender: oneshot::Sender<bool>,
     nexus: String,
+    child: Option<String>,
 }
 
-#[allow(dead_code)]
 fn update_failfast_cb(
     channel: &mut NexusChannelInner,
     ctx: &mut UpdateFailFastCtx,
 ) -> i32 {
-    let old_value = channel.fail_fast;
-
-    if ctx.increment {
-        channel.fail_fast = channel
-            .fail_fast
-            .checked_add(1)
-            .expect("Fail-fast counter overflow");
-    } else {
-        channel.fail_fast = channel
-            .fail_fast
-            .checked_sub(1)
-            .expect("Fail-fast counter underflow");
-    }
-    info!(
-        "{}: fail-fast counter transition: {} -> {}",
-        ctx.nexus, old_value, channel.fail_fast
-    );
-
+    channel.remove_child_in_submit(ctx.child.as_ref().unwrap());
     0
 }
 
@@ -751,7 +734,7 @@ impl Nexus {
     /// with the nexus paused once they are awakened via resume().
     /// Note: in order to handle concurrent pauses properly, this function must
     /// be called only from the master core.
-    pub async fn pause(&mut self) -> Result<(), Error> {
+    pub async fn pause(&mut self) -> Result<(), NexusPauseState> {
         assert_eq!(Cores::current(), Cores::first());
 
         let state = self
@@ -759,12 +742,11 @@ impl Nexus {
             .compare_exchange(
                 NexusPauseState::Unpaused,
                 NexusPauseState::Pausing,
-            )
-            .unwrap();
+            )?;
 
         match state {
-            // Pause nexus if its unpaused.
-            NexusPauseState::Unpaused => {
+            // Pause nexus if it is in the unpaused state.
+            NexusPauseState::Pausing => {
                 info!("{} pausing nexus", self.name);
                 if let Some(Protocol::Nvmf) = self.shared() {
                     if let Some(subsystem) =
@@ -791,7 +773,6 @@ impl Nexus {
                     .unwrap();
                 info!("{} nexus paused", self.name);
             }
-            // Wait till the pauser unpauses the nexus.
             _ => {
                 info!(
                     "{} concurrent subsystem pause detected, yielding at state: {:?}",
@@ -814,13 +795,14 @@ impl Nexus {
     // for the child.
 
     #[allow(dead_code)]
-    async fn update_failfast(&self, increment: bool) -> Result<(), Error> {
+    async fn update_failfast(&self, increment: bool, child: Option<String>) -> Result<(), Error> {
         let (sender, r) = oneshot::channel::<bool>();
 
         let ctx = UpdateFailFastCtx {
             sender,
             increment,
             nexus: self.name.clone(),
+            child,
         };
 
         let io_device = self.io_device.as_ref().expect("Nexus not opened");
@@ -838,14 +820,19 @@ impl Nexus {
         Ok(())
     }
 
+    pub async fn child_retire(&self, name: String) -> Result<(), Error> {
+        self.update_failfast( false, Some(name)).await
+
+    }
+
     #[allow(dead_code)]
     pub async fn set_failfast(&self) -> Result<(), Error> {
-        self.update_failfast(true).await
+        self.update_failfast(true, None).await
     }
 
     #[allow(dead_code)]
     pub async fn clear_failfast(&self) -> Result<(), Error> {
-        self.update_failfast(false).await
+        self.update_failfast(false, None).await
     }
 
     /// get ANA state of the NVMe subsystem

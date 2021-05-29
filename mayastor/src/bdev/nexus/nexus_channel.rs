@@ -144,7 +144,7 @@ impl NexusChannelInner {
             .iter()
             .filter(|c| c.state() == ChildState::Open)
             .filter(|c| {
-                // If there where previous retires, we do not have a referece
+                // If there where previous retires, we do not have a reference
                 // to a BlockDevice. We do however, know it cant be the device
                 // we are attempting to retire in the first place so this
                 // condition is fine.
@@ -185,9 +185,9 @@ impl NexusChannelInner {
         // clear the vector of channels and reset other internal values,
         // clearing the values will drop any existing handles in the
         // channel
-        self.writers.clear();
+
+        self.writers.iter();
         self.readers.clear();
-        self.previous = 0;
 
         // iterate over all our children which are in the open state
         nexus

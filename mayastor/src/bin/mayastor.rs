@@ -24,15 +24,12 @@ use mayastor::{
     persistent_store::PersistentStore,
     subsys::Registration,
 };
+use std::{sync::atomic::Ordering, time::Duration};
 
 // manual call to a gRCP method.
 async fn reaper() {
     loop {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        dbg!(&PAUSED);
-        dbg!(&PAUSING);
-        dbg!(DEAD_LIST.len());
-
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         if let Ok(cmd) = DEAD_LIST.pop() {
             match cmd {
                 Command::Retire(nexus, child) => {
@@ -75,7 +72,7 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
 
     Mthread::spawn_unaffinitized(move || {
         runtime::block_on(async move {
-            //          runtime::spawn(reaper());
+            runtime::spawn(reaper());
             let mut futures = Vec::new();
             if let Some(endpoint) = endpoint {
                 debug!("mayastor mbus subsystem init");

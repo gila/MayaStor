@@ -58,6 +58,16 @@ class MayastorHandle(object):
                 name=str(name),
                 proto="nvmf")).uri
 
+    def bdev_unshare(self, name):
+        return self.bdev.Unshare(
+            pb.CreateReply(
+                name=str(name)))
+
+    def bdev_destroy(self, uri):
+        return self.bdev.Destroy(
+            pb.BdevUri(
+                uri=str(uri)))
+
     def pool_create(self, name, bdev):
         """Create a pool with given name on this node using the bdev as the
         backend device. The bdev is implicitly created."""

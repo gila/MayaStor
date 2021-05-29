@@ -45,7 +45,7 @@ async def run_cmd_async_at(host, cmd):
     async with asyncssh.connect(host) as conn:
         result = await conn.run(cmd, check=False)
 
-        output_message = f"Command:\n {host}:{cmd}"
+        output_message = f"Command: {host}:{cmd}\n"
         # Append stdout/stderr to the output message
         if result.stdout != "":
             output_message += f"\nstdout:\n{result.stdout}"
@@ -60,7 +60,6 @@ async def run_cmd_async_at(host, cmd):
             if result.stderr != "":
                 output_message += \
                     f"\nstderr:\n{result.stderr}"
-            print(output_message)
             raise ChildProcessError(output_message)
 
         return CommandReturn(
