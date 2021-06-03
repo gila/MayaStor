@@ -42,6 +42,7 @@ use crate::{
     },
     core::{
         Bdev,
+        Command,
         CoreError,
         Cores,
         IoDevice,
@@ -49,6 +50,7 @@ use crate::{
         Protocol,
         Reactor,
         Share,
+        MWQ,
     },
     ffihelper::errno_result_from_i32,
     nexus_uri::NexusBdevError,
@@ -788,13 +790,16 @@ impl Nexus {
             }
 
             Err(NexusPauseState::Pausing) | Err(NexusPauseState::Paused) => {
-                // we are alreayd pausing or pasued
+                // we are already pausing or paused
                 return Ok(());
             }
 
             // we must pause again, schedule pause operation
             Err(NexusPauseState::Unpausing) => {
-               return Err(Error::PauseError{ state: NexusPauseState::Unpausing, name: self.name.clone()});
+                return Err(Error::PauseError {
+                    state: NexusPauseState::Unpausing,
+                    name: self.name.clone(),
+                });
             }
             _ => {
                 panic!("huh?");
@@ -880,11 +885,13 @@ impl Nexus {
         self.pause().await?;
         debug!(?self, "UNPAUSE");
         if let Some(child) = self.child_lookup(&name) {
-            self.persist(PersistOp::Update((
-                child.name.clone(),
-                child.state(),
-            )))
-            .await;
+            let uri = child.name.clone();
+            // schedule the deletion of the child eventhough etcd has not been
+            // updated yet we do not need to wait for that to
+            // complete anyway.
+            MWQ.enqueue(Command::RemoveDevice(self.name.clone(), name));
+            self.persist(PersistOp::Update((uri.clone(), child.state())))
+                .await;
         }
         self.resume().await
     }
@@ -1061,9 +1068,14 @@ pub async fn nexus_create(
     // global variable defined in the nexus module
     let nexus_list = instances();
 
-    if nexus_list.iter().any(|n| n.name == name) {
+    if let Some(nexus) = nexus_list.iter().find(|n| n.name == name) {
         // FIXME: Instead of error, we return Ok without checking
         // that the children match, which seems wrong.
+        if *nexus.state.lock() == NexusState::Init {
+            return Err(Error::NexusNotFound {
+                name: name.to_owned(),
+            });
+        }
         return Ok(());
     }
 
