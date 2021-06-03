@@ -48,6 +48,7 @@ use crate::{
         IoType,
         Protocol,
         Reactor,
+        Reactors,
         Share,
     },
     ffihelper::errno_result_from_i32,
@@ -794,7 +795,10 @@ impl Nexus {
 
             // we must pause again, schedule pause operation
             Err(NexusPauseState::Unpausing) => {
-               return Err(Error::PauseError{ state: NexusPauseState::Unpausing, name: self.name.clone()});
+                return Err(Error::PauseError {
+                    state: NexusPauseState::Unpausing,
+                    name: self.name.clone(),
+                });
             }
             _ => {
                 panic!("huh?");
@@ -880,11 +884,9 @@ impl Nexus {
         self.pause().await?;
         debug!(?self, "UNPAUSE");
         if let Some(child) = self.child_lookup(&name) {
-            self.persist(PersistOp::Update((
-                child.name.clone(),
-                child.state(),
-            )))
-            .await;
+            let uri = child.name.clone();
+            self.persist(PersistOp::Update((uri.clone(), child.state())))
+                .await;
         }
         self.resume().await
     }

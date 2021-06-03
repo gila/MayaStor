@@ -107,6 +107,7 @@ impl ToString for QPairState {
     }
 }
 
+#[derive(Debug)]
 pub struct IoQpair {
     qpair: NonNull<spdk_nvme_qpair>,
     ctrlr_handle: SpdkNvmeController,
@@ -245,6 +246,15 @@ impl Drop for IoQpair {
         }
 
         debug!(?qpair, "qpair successfully dropped,");
+    }
+}
+
+impl std::fmt::Debug for NvmeIoChannelInner<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NvmeIoChannelInner")
+            .field("qpair", &self.qpair)
+            .field("pending IO", &self.num_pending_ios)
+            .finish()
     }
 }
 

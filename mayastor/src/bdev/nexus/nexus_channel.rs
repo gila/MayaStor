@@ -122,9 +122,10 @@ impl NexusChannelInner {
         self.writers
             .retain(|c| c.get_device().device_name() != name);
 
-        trace!(
-            "{}: New number of IO channels write:{} read:{} out of {} children",
-            nexus.name,
+        trace!(?name,
+            "core: {} thread: {}: New number of IO channels write:{} read:{} out of {} children",
+            Cores::current(),
+            Mthread::current().unwrap().name(),
             self.writers.len(),
             self.readers.len(),
             nexus.children.len()

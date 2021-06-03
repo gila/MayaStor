@@ -62,7 +62,7 @@ const MAX_RESET_ATTEMPTS: u32 = 1;
 
 /// Time to wait till reset attempts can be recharged to maximum
 /// after all current reset attempts have been used.
-const RESET_COOLDOWN_INTERVAL: Duration = Duration::from_secs(30);
+const RESET_COOLDOWN_INTERVAL: Duration = Duration::from_secs(3);
 
 pub(crate) struct TimeoutConfig {
     pub name: String,
@@ -321,53 +321,55 @@ impl<'a> NvmeController<'a> {
             timeout_action = DeviceTimeoutAction::Reset;
         }
 
+        timeout_cfg.reset_controller();
+
         // Handle timeout based on the action.
-        match timeout_action {
-            DeviceTimeoutAction::Abort | DeviceTimeoutAction::Reset => {
-                if timeout_action == DeviceTimeoutAction::Abort {
-                    // Abort commands only for non-admin queue, fallthrough
-                    // to reset otherwise.
-                    if !qpair.is_null() {
-                        error!("{}: aborting CID {}", timeout_cfg.name, cid);
-                        let rc = spdk_ctrlr.abort_queued_command(
-                            qpair,
-                            cid,
-                            Some(NvmeController::command_abort_handler),
-                            cb_arg,
-                        );
-                        if rc == 0 {
-                            info!(
-                                "{}: initiated abort for CID {}",
-                                timeout_cfg.name, cid
-                            );
-                            return;
-                        }
-                        error!(
-                            "{}: unable to abort CID {}, reset required",
-                            timeout_cfg.name, cid
-                        );
-                    } else {
-                        info!(
-                            "{}: skipping Abort timeout action for admin qpair",
-                            timeout_cfg.name
-                        );
-                    }
-                    // Fallthrough to perform controller reset in case abort
-                    // fails.
-                }
-                info!(
-                    "{} resetting controller in response to I/O timeout",
-                    timeout_cfg.name
-                );
-                timeout_cfg.reset_controller();
-            }
-            DeviceTimeoutAction::Ignore => {
-                info!(
-                    "{}: no I/O timeout action defined, timeout ignored",
-                    timeout_cfg.name
-                );
-            }
-        }
+        // match timeout_action {
+        //     DeviceTimeoutAction::Abort | DeviceTimeoutAction::Reset => {
+        //         if timeout_action == DeviceTimeoutAction::Abort {
+        //             // Abort commands only for non-admin queue, fallthrough
+        //             // to reset otherwise.
+        //             if !qpair.is_null() {
+        //                 error!("{}: aborting CID {}", timeout_cfg.name, cid);
+        //                 let rc = spdk_ctrlr.abort_queued_command(
+        //                     qpair,
+        //                     cid,
+        //                     Some(NvmeController::command_abort_handler),
+        //                     cb_arg,
+        //                 );
+        //                 if rc == 0 {
+        //                     info!(
+        //                         "{}: initiated abort for CID {}",
+        //                         timeout_cfg.name, cid
+        //                     );
+        //                     return;
+        //                 }
+        //                 error!(
+        //                     "{}: unable to abort CID {}, reset required",
+        //                     timeout_cfg.name, cid
+        //                 );
+        //             } else {
+        //                 info!(
+        //                     "{}: skipping Abort timeout action for admin
+        // qpair",                     timeout_cfg.name
+        //                 );
+        //             }
+        //             // Fallthrough to perform controller reset in case abort
+        //             // fails.
+        //         }
+        //         info!(
+        //             "{} resetting controller in response to I/O timeout",
+        //             timeout_cfg.name
+        //         );
+        //         timeout_cfg.reset_controller();
+        //     }
+        //     DeviceTimeoutAction::Ignore => {
+        //         info!(
+        //             "{}: no I/O timeout action defined, timeout ignored",
+        //             timeout_cfg.name
+        //         );
+        //     }
+        // }
     }
 
     pub(crate) fn configure_timeout(&mut self) {

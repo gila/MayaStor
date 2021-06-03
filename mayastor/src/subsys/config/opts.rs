@@ -269,7 +269,7 @@ impl Default for NvmeBdevOpts {
         Self {
             action_on_timeout: SPDK_BDEV_NVME_TIMEOUT_ACTION_ABORT,
             timeout_us: try_from_env("NVME_TIMEOUT_US", 5_000_000),
-            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 0),
+            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 1_000),
             retry_count: try_from_env("NVME_RETRY_COUNT", 0),
             arbitration_burst: 0,
             low_priority_weight: 0,
