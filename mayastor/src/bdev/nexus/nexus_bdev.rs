@@ -1066,9 +1066,14 @@ pub async fn nexus_create(
     // global variable defined in the nexus module
     let nexus_list = instances();
 
-    if nexus_list.iter().any(|n| n.name == name) {
+    if let Some(nexus) = nexus_list.iter().find(|n| n.name == name) {
         // FIXME: Instead of error, we return Ok without checking
         // that the children match, which seems wrong.
+        if *nexus.state.lock() == NexusState::Init {
+            return Err(Error::NexusNotFound {
+                name: name.to_owned(),
+            });
+        }
         return Ok(());
     }
 

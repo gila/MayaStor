@@ -73,10 +73,14 @@ use snafu::{ResultExt, Snafu};
 use uuid::{self, Uuid};
 
 use crate::{
-    bdev::nexus::{
-        nexus_bdev::Nexus,
-        nexus_child::NexusChild,
-        nexus_metadata::{MetaDataError, MetaDataIndex, NexusMetaData},
+    bdev::{
+        nexus::{
+            nexus_bdev::Nexus,
+            nexus_child::NexusChild,
+            nexus_metadata::{MetaDataError, MetaDataIndex, NexusMetaData},
+        },
+        ChildState,
+        Reason,
     },
     core::{BlockDeviceHandle, CoreError, DmaBuf, DmaError},
 };
@@ -1470,7 +1474,7 @@ impl Nexus {
         let mut offsets: Vec<u64> = Vec::new();
         let mut size = self.size;
 
-        for child in self.children.iter_mut() {
+        for child in self.children.iter_mut().filter(|c| c.is_open()) {
             let label = child.validate_label().await?;
 
             if child.metadata_index_lba == 0 {
@@ -1520,7 +1524,7 @@ impl Nexus {
         let now = SystemTime::now();
         let guid = GptGuid::from(self.bdev.uuid());
 
-        for child in self.children.iter_mut() {
+        for child in self.children.iter_mut().filter(|c| c.is_open()) {
             child.update_label(guid, self.size, &now).await?;
         }
 
@@ -1539,7 +1543,7 @@ impl Nexus {
         let mut offsets: Vec<u64> = Vec::new();
         let mut size = self.size;
 
-        for child in self.children.iter_mut() {
+        for child in self.children.iter_mut().filter(|c| c.is_open()) {
             let label = child.create_label(guid, self.size, &now).await?;
 
             if child.metadata_index_lba == 0 {
