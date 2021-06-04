@@ -79,8 +79,6 @@ use crate::{
             nexus_child::NexusChild,
             nexus_metadata::{MetaDataError, MetaDataIndex, NexusMetaData},
         },
-        ChildState,
-        Reason,
     },
     core::{BlockDeviceHandle, CoreError, DmaBuf, DmaError},
 };

@@ -49,7 +49,6 @@ use crate::{
         IoType,
         Protocol,
         Reactor,
-        Reactors,
         Share,
         MWQ,
     },

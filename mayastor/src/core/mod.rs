@@ -3,7 +3,7 @@
 use std::{fmt::Debug, sync::atomic::AtomicUsize, time::Duration};
 
 pub use ::uuid::Uuid;
-use futures::channel::oneshot::Receiver;
+
 use nix::errno::Errno;
 use snafu::Snafu;
 
@@ -278,4 +278,4 @@ impl<T: Send + Debug> MayastorWorkQueue<T> {
 }
 
 pub static MWQ: once_cell::sync::Lazy<MayastorWorkQueue<Command>> =
-    once_cell::sync::Lazy::new(|| MayastorWorkQueue::new());
+    once_cell::sync::Lazy::new(MayastorWorkQueue::new);

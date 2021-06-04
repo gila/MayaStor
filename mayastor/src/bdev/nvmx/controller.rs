@@ -23,7 +23,6 @@ use spdk_sys::{
     spdk_nvme_ctrlr_is_active_ns,
     spdk_nvme_ctrlr_process_admin_completions,
     spdk_nvme_ctrlr_register_aer_callback,
-    spdk_nvme_ctrlr_reset,
     spdk_nvme_detach,
 };
 
@@ -60,7 +59,7 @@ use crate::{
         OpCompletionCallback,
         OpCompletionCallbackArg,
     },
-    ffihelper::{cb_arg, done_cb, FfiResult},
+    ffihelper::{cb_arg, done_cb},
     nexus_uri::NexusBdevError,
 };
 
@@ -817,7 +816,7 @@ pub extern "C" fn nvme_poll_adminq(ctx: *mut c_void) -> i32 {
     }
 
     if result == 0 {
-        return 0;
+        0
     } else {
         1
     }

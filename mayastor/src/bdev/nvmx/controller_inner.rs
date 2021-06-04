@@ -13,7 +13,6 @@ use spdk_sys::{
     spdk_nvme_cpl,
     spdk_nvme_ctrlr,
     spdk_nvme_ctrlr_cmd_abort,
-    spdk_nvme_ctrlr_fail,
     spdk_nvme_ctrlr_get_regs_csts,
     spdk_nvme_ctrlr_register_timeout_callback,
     spdk_nvme_qpair,
