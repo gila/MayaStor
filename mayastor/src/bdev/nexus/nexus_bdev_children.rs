@@ -514,7 +514,7 @@ impl Nexus {
     pub async fn destroy_child(&mut self, name: &str) -> Result<(), Error> {
         if let Some(child) = self.child_lookup(&name) {
             child.destroy().await.map_err(|source| Error::DestroyChild {
-                source: e,
+                source,
                 child: name.to_string(),
                 name: self.name.to_string(),
             })

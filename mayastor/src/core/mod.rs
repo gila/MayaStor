@@ -229,11 +229,9 @@ pub async fn device_monitor() {
             match w {
                 Command::RemoveDevice(nexus, child) => {
                     let rx = handle.spawn_local(async move {
-                        dbg!(
-                            nexus_lookup(&name)
-                                .map(|n| n.destroy_child(&child))
-                                .await
-                        );
+                            if let Some(n) = nexus_lookup(&nexus) {
+                                n.destroy_child(&child).await;
+                            }
                     });
                     rx.unwrap().await.unwrap();
                 }
