@@ -60,7 +60,7 @@ use crate::{
         OpCompletionCallback,
         OpCompletionCallbackArg,
     },
-    ffihelper::{cb_arg, done_cb},
+    ffihelper::{cb_arg, done_cb, FfiResult},
     nexus_uri::NexusBdevError,
 };
 
@@ -611,6 +611,9 @@ impl<'a> NvmeController<'a> {
             return;
         }
 
+        // mark the controller as failed
+        unsafe { spdk_nvme_ctrlr_fail(reset_ctx.spdk_handle.as_ptr()) };
+
         //        let rc =
         //            unsafe {
         // spdk_nvme_ctrlr_reset(reset_ctx.spdk_handle.as_ptr()) };
@@ -804,15 +807,17 @@ pub extern "C" fn nvme_poll_adminq(ctx: *mut c_void) -> i32 {
     let mut context = NonNull::<TimeoutConfig>::new(ctx.cast())
         .expect("ctx pointer may never be null");
     let context = unsafe { context.as_mut() };
-    let rc =
+
+    let result =
         unsafe { spdk_nvme_ctrlr_process_admin_completions(context.ctrlr) };
-    if rc < 0 {
-        //tracing::error!("Would call reset_controller here!");
-        //context.reset_controller();
+
+    if result < 0 {
+        //error!("{}: {}", context.name, Errno::from_i32(result.abs()));
+        return 1;
     }
 
-    if rc == 0 {
-        0
+    if result == 0 {
+        return 0;
     } else {
         1
     }

@@ -7,8 +7,15 @@ use futures::future::FutureExt;
 use structopt::StructOpt;
 
 use mayastor::{
-    bdev::util::uring,
-    core::{runtime, MayastorCliArgs, MayastorEnvironment, Mthread, Reactors},
+    bdev::{device_destroy, util::uring},
+    core::{
+        device_monitor,
+        runtime,
+        MayastorCliArgs,
+        MayastorEnvironment,
+        Mthread,
+        Reactors,
+    },
     grpc,
     logger,
     persistent_store::PersistentStore,
@@ -39,6 +46,7 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
             }
 
             PersistentStore::init(persistent_store_endpoint).await;
+            runtime::spawn(device_monitor());
 
             futures.push(
                 grpc::MayastorGrpcServer::run(grpc_address, rpc_address)

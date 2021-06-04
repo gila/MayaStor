@@ -42,6 +42,7 @@ use crate::{
     },
     core::{
         Bdev,
+        Command,
         CoreError,
         Cores,
         IoDevice,
@@ -50,6 +51,7 @@ use crate::{
         Reactor,
         Reactors,
         Share,
+        MWQ,
     },
     ffihelper::errno_result_from_i32,
     nexus_uri::NexusBdevError,
@@ -789,7 +791,7 @@ impl Nexus {
             }
 
             Err(NexusPauseState::Pausing) | Err(NexusPauseState::Paused) => {
-                // we are alreayd pausing or pasued
+                // we are already pausing or paused
                 return Ok(());
             }
 
@@ -887,6 +889,7 @@ impl Nexus {
             let uri = child.name.clone();
             self.persist(PersistOp::Update((uri.clone(), child.state())))
                 .await;
+            MWQ.enqueue(Command::RemoveDevice(uri));
         }
         self.resume().await
     }

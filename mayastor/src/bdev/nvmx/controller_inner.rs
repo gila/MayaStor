@@ -13,6 +13,7 @@ use spdk_sys::{
     spdk_nvme_cpl,
     spdk_nvme_ctrlr,
     spdk_nvme_ctrlr_cmd_abort,
+    spdk_nvme_ctrlr_fail,
     spdk_nvme_ctrlr_get_regs_csts,
     spdk_nvme_ctrlr_register_timeout_callback,
     spdk_nvme_qpair,
@@ -70,6 +71,7 @@ pub(crate) struct TimeoutConfig {
     reset_in_progress: AtomicCell<bool>,
     pub ctrlr: *mut spdk_nvme_ctrlr,
     reset_attempts: u32,
+    errors: u32,
     next_reset_time: Instant,
 }
 
@@ -89,6 +91,7 @@ impl TimeoutConfig {
             reset_in_progress: AtomicCell::new(false),
             ctrlr: std::ptr::null_mut(),
             reset_attempts: MAX_RESET_ATTEMPTS,
+            errors: 0,
             next_reset_time: Instant::now(),
         }
     }
@@ -321,6 +324,7 @@ impl<'a> NvmeController<'a> {
             timeout_action = DeviceTimeoutAction::Reset;
         }
 
+        //unsafe { spdk_nvme_ctrlr_fail(timeout_cfg.ctrlr) };
         timeout_cfg.reset_controller();
 
         // Handle timeout based on the action.

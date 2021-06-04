@@ -1,8 +1,9 @@
 //!
 //! core contains the primary abstractions around the SPDK primitives.
-use std::sync::atomic::AtomicUsize;
+use std::{fmt::Debug, sync::atomic::AtomicUsize, time::Duration};
 
 pub use ::uuid::Uuid;
+use futures::channel::oneshot::Receiver;
 use nix::errno::Errno;
 use snafu::Snafu;
 
@@ -48,7 +49,13 @@ pub use runtime::spawn;
 pub use share::{Protocol, Share};
 pub use thread::Mthread;
 
-use crate::{subsys::NvmfError, target::iscsi};
+use crate::{
+    bdev::{device_destroy, nexus::nexus_persistence::PersistOp, nexus_lookup},
+    nexus_uri::NexusBdevError,
+    persistent_store::PersistentStore,
+    subsys::NvmfError,
+    target::iscsi,
+};
 
 mod bdev;
 mod bio;
@@ -208,15 +215,61 @@ pub enum IoCompletionStatus {
     NvmeError(NvmeCommandStatus),
 }
 
+// TODO move this elsewhere ASAP
 pub static PAUSING: AtomicUsize = AtomicUsize::new(0);
 pub static PAUSED: AtomicUsize = AtomicUsize::new(0);
-type Nexus = String;
-type Child = String;
 
-pub enum Command {
-    Retire(Nexus, Child),
+pub async fn device_monitor() {
+    let mut interval = tokio::time::interval(Duration::from_millis(10));
+    loop {
+        interval.tick().await;
+        if let Some(w) = MWQ.take() {
+            info!(?w, "executing command");
+            match w {
+                Command::RemoveDevice(name) => {
+                    let rx = Mthread::get_init().spawn_local(async move {
+                        dbg!(device_destroy(&name).await);
+                    });
+                    rx.unwrap().await.unwrap();
+                }
+            }
+        }
+    }
 }
 
-pub static DEAD_LIST: once_cell::sync::Lazy<
-    crossbeam::queue::SegQueue<Command>,
-> = once_cell::sync::Lazy::new(crossbeam::queue::SegQueue::new);
+#[derive(Debug, Clone)]
+pub enum Command {
+    RemoveDevice(String),
+}
+
+#[derive(Debug)]
+pub struct MayastorWorkQueue<T: Send + Debug> {
+    incoming: crossbeam::queue::SegQueue<T>,
+}
+
+impl<T: Send + Debug> MayastorWorkQueue<T> {
+    pub fn new() -> Self {
+        Self {
+            incoming: crossbeam::queue::SegQueue::new(),
+        }
+    }
+
+    pub fn enqueue(&self, entry: T) {
+        trace!(?entry, "enqueued");
+        self.incoming.push(entry)
+    }
+
+    pub fn len(&self) -> usize {
+        self.incoming.len()
+    }
+
+    pub fn take(&self) -> Option<T> {
+        if let Ok(elem) = self.incoming.pop() {
+            return Some(elem);
+        }
+        None
+    }
+}
+
+pub static MWQ: once_cell::sync::Lazy<MayastorWorkQueue<Command>> =
+    once_cell::sync::Lazy::new(|| MayastorWorkQueue::new());
