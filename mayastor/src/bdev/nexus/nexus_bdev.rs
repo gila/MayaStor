@@ -889,7 +889,7 @@ impl Nexus {
             let uri = child.name.clone();
             self.persist(PersistOp::Update((uri.clone(), child.state())))
                 .await;
-            MWQ.enqueue(Command::RemoveDevice(uri));
+            MWQ.enqueue(Command::RemoveDevice(self.name.clone(), name));
         }
         self.resume().await
     }

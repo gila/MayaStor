@@ -220,15 +220,20 @@ pub static PAUSING: AtomicUsize = AtomicUsize::new(0);
 pub static PAUSED: AtomicUsize = AtomicUsize::new(0);
 
 pub async fn device_monitor() {
+    let handle = Mthread::get_init();
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     loop {
         interval.tick().await;
         if let Some(w) = MWQ.take() {
             info!(?w, "executing command");
             match w {
-                Command::RemoveDevice(name) => {
-                    let rx = Mthread::get_init().spawn_local(async move {
-                        dbg!(device_destroy(&name).await);
+                Command::RemoveDevice(nexus, child) => {
+                    let rx = handle.spawn_local(async move {
+                        dbg!(
+                            nexus_lookup(&name)
+                                .map(|n| n.destroy_child(&child))
+                                .await
+                        );
                     });
                     rx.unwrap().await.unwrap();
                 }
@@ -237,9 +242,12 @@ pub async fn device_monitor() {
     }
 }
 
+type Nexus = String;
+type Child = String;
+
 #[derive(Debug, Clone)]
 pub enum Command {
-    RemoveDevice(String),
+    RemoveDevice(Nexus, Child),
 }
 
 #[derive(Debug)]
