@@ -23,6 +23,7 @@ use spdk_sys::{
     spdk_nvme_ctrlr_is_active_ns,
     spdk_nvme_ctrlr_process_admin_completions,
     spdk_nvme_ctrlr_register_aer_callback,
+    spdk_nvme_ctrlr_reset,
     spdk_nvme_detach,
 };
 
@@ -68,6 +69,7 @@ const RESET_CTX_POOL_SIZE: u64 = 1024 - 1;
 // Memory pool for keeping context during controller resets.
 static RESET_CTX_POOL: OnceCell<MemoryPool<ResetCtx>> = OnceCell::new();
 
+#[derive(Debug)]
 struct ResetCtx {
     name: String,
     cb: OpCompletionCallback,
@@ -589,6 +591,45 @@ impl<'a> NvmeController<'a> {
         rc
     }
 
+    fn hot_remove_channels_done(status: i32, ctx: ResetCtx) {
+        trace!(?ctx, "all I/O channels successfully removed");
+        // mark the controller as failed
+        //unsafe { spdk_nvme_ctrlr_fail(ctx.spdk_handle.as_ptr()) };
+        NVME_CONTROLLERS.lookup_by_name(&ctx.name).map(|mut c| {
+            c.lock()
+                .state_machine
+                .transition(NvmeControllerState::Unconfigured);
+        });
+    }
+
+    pub fn hot_remove(
+        &mut self,
+        cb: OpCompletionCallback,
+        cb_arg: OpCompletionCallbackArg,
+    ) -> Result<(), CoreError> {
+        let _ = self.state_machine.transition(NvmeControllerState::Unconfiguring);
+        unsafe { spdk_nvme_ctrlr_fail(self.ctrlr_as_ptr()) };
+        let io_device = Arc::clone(&self.inner.as_ref().unwrap().io_device);
+        let reset_ctx = ResetCtx {
+            name: self.name.clone(),
+            cb,
+            cb_arg,
+            spdk_handle: self.controller().expect("controller may not be NULL"),
+            io_device,
+            shutdown_in_progress: false,
+        };
+
+        let inner = self.inner.as_mut().unwrap();
+        // Iterate over all I/O channels and reset/configure them one by one.
+        inner.io_device.traverse_io_channels(
+            NvmeController::_reset_destroy_channels,
+            NvmeController::hot_remove_channels_done,
+            NvmeIoChannel::inner_from_channel,
+            reset_ctx,
+        );
+        Ok(())
+    }
+
     fn _reset_destroy_channels_done(status: i32, reset_ctx: ResetCtx) {
         if status != 0 {
             error!(
@@ -610,37 +651,32 @@ impl<'a> NvmeController<'a> {
             return;
         }
 
-        // mark the controller as failed
-        unsafe { spdk_nvme_ctrlr_fail(reset_ctx.spdk_handle.as_ptr()) };
+        let rc =
+            unsafe { spdk_nvme_ctrlr_reset(reset_ctx.spdk_handle.as_ptr()) };
+        if rc != 0 {
+            error!(
+                "{} failed to reset controller, rc = {}",
+                reset_ctx.name, rc
+            );
 
-        //        let rc =
-        //            unsafe {
-        // spdk_nvme_ctrlr_reset(reset_ctx.spdk_handle.as_ptr()) };
-        //        if rc != 0 {
-        //            error!(
-        //                "{} failed to reset controller, rc = {}",
-        //                reset_ctx.name, rc
-        //            );
-        //
-        //            NvmeController::_complete_reset(reset_ctx, rc);
-        //        } else {
-        //            debug!(
-        //                "{} controller successfully reset, reinitializing I/O
-        // channels",                reset_ctx.name
-        //            );
-        //
-        //            /* Once controller is successfully reset, schedule another
-        // I/O
-        //             * channel traversal to restore all I/O channels.
-        //             */
-        //            let io_device = Arc::clone(&reset_ctx.io_device);
-        //            io_device.traverse_io_channels(
-        //                NvmeController::_reset_create_channels,
-        //                NvmeController::_reset_create_channels_done,
-        //                NvmeIoChannel::inner_from_channel,
-        //                reset_ctx,
-        //            );
-        //        }
+            NvmeController::_complete_reset(reset_ctx, rc);
+        } else {
+            debug!(
+                "{} controller successfully reset, reinitializing I/O
+        channels",
+                reset_ctx.name
+            );
+
+            // Once controller is successfully reset, schedule another
+            //I/O channel traversal to restore all I/O channels.
+            let io_device = Arc::clone(&reset_ctx.io_device);
+            io_device.traverse_io_channels(
+                NvmeController::_reset_create_channels,
+                NvmeController::_reset_create_channels_done,
+                NvmeIoChannel::inner_from_channel,
+                reset_ctx,
+            );
+        }
     }
 
     fn _reset_create_channels(

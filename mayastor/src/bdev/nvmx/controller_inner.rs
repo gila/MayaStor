@@ -132,6 +132,35 @@ impl TimeoutConfig {
         );
     }
 
+    ///
+    /// After an IO timeout, we remove will remove any qpairs associated with
+    /// this controller. This will result into to any pending IO (waiting
+    /// for completion) to be aborted. While this is happening, due to the
+    /// nature of the reactor, new IO sumbitted to a qpair we just detached,
+    /// will get an EXIO.
+
+    pub(crate) fn hot_remove(&mut self) {
+        fn hot_remove_cb(success: bool, ctx: *mut c_void) {
+            let timeout_ctx =
+                TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
+
+            if success {
+                info!(
+                "{} controller successfully removed in response to I/O timeout",
+                timeout_ctx.name
+            );
+            }
+        }
+
+        if let Some(c) = NVME_CONTROLLERS.lookup_by_name(&self.name) {
+            let mut c = c.lock();
+            c.hot_remove(
+                hot_remove_cb,
+                self as *mut TimeoutConfig as *mut c_void,
+            );
+        }
+    }
+
     /// Resets controller exclusively, taking into account existing active
     /// resets related to I/O timeout.
     pub(crate) fn reset_controller(&mut self) {
@@ -315,7 +344,10 @@ impl<'a> NvmeController<'a> {
 
         // Check Controller Fatal Status for non-admin commands only to avoid
         // endless command resubmission in case of disconnected qpair.
-        if !qpair.is_null() && spdk_ctrlr.check_cfs() {
+        if !qpair.is_null()
+            && spdk_ctrlr.check_cfs()
+            && timeout_action != DeviceTimeoutAction::HotRemove
+        {
             error!(
                 "{}: controller Fatal Status set, reset required",
                 timeout_cfg.name
@@ -323,56 +355,58 @@ impl<'a> NvmeController<'a> {
             timeout_action = DeviceTimeoutAction::Reset;
         }
 
-        //unsafe { spdk_nvme_ctrlr_fail(timeout_cfg.ctrlr) };
-        timeout_cfg.reset_controller();
-
-        // Handle timeout based on the action.
-        // match timeout_action {
-        //     DeviceTimeoutAction::Abort | DeviceTimeoutAction::Reset => {
-        //         if timeout_action == DeviceTimeoutAction::Abort {
-        //             // Abort commands only for non-admin queue, fallthrough
-        //             // to reset otherwise.
-        //             if !qpair.is_null() {
-        //                 error!("{}: aborting CID {}", timeout_cfg.name, cid);
-        //                 let rc = spdk_ctrlr.abort_queued_command(
-        //                     qpair,
-        //                     cid,
-        //                     Some(NvmeController::command_abort_handler),
-        //                     cb_arg,
-        //                 );
-        //                 if rc == 0 {
-        //                     info!(
-        //                         "{}: initiated abort for CID {}",
-        //                         timeout_cfg.name, cid
-        //                     );
-        //                     return;
-        //                 }
-        //                 error!(
-        //                     "{}: unable to abort CID {}, reset required",
-        //                     timeout_cfg.name, cid
-        //                 );
-        //             } else {
-        //                 info!(
-        //                     "{}: skipping Abort timeout action for admin
-        // qpair",                     timeout_cfg.name
-        //                 );
-        //             }
-        //             // Fallthrough to perform controller reset in case abort
-        //             // fails.
-        //         }
-        //         info!(
-        //             "{} resetting controller in response to I/O timeout",
-        //             timeout_cfg.name
-        //         );
-        //         timeout_cfg.reset_controller();
-        //     }
-        //     DeviceTimeoutAction::Ignore => {
-        //         info!(
-        //             "{}: no I/O timeout action defined, timeout ignored",
-        //             timeout_cfg.name
-        //         );
-        //     }
-        // }
+        //Handle timeout based on the action.
+        match timeout_action {
+            DeviceTimeoutAction::Abort | DeviceTimeoutAction::Reset => {
+                if timeout_action == DeviceTimeoutAction::Abort {
+                    // Abort commands only for non-admin queue, fallthrough
+                    // to reset otherwise.
+                    if !qpair.is_null() {
+                        error!("{}: aborting CID {}", timeout_cfg.name, cid);
+                        let rc = spdk_ctrlr.abort_queued_command(
+                            qpair,
+                            cid,
+                            Some(NvmeController::command_abort_handler),
+                            cb_arg,
+                        );
+                        if rc == 0 {
+                            info!(
+                                "{}: initiated abort for CID {}",
+                                timeout_cfg.name, cid
+                            );
+                            return;
+                        }
+                        error!(
+                            "{}: unable to abort CID {}, reset required",
+                            timeout_cfg.name, cid
+                        );
+                    } else {
+                        info!(
+                            "{}: skipping Abort timeout action for admin
+        qpair",
+                            timeout_cfg.name
+                        );
+                    }
+                    // Fallthrough to perform controller reset in case abort
+                    // fails.
+                }
+                info!(
+                    "{} resetting controller in response to I/O timeout",
+                    timeout_cfg.name
+                );
+                timeout_cfg.reset_controller();
+            }
+            DeviceTimeoutAction::Ignore => {
+                info!(
+                    "{}: no I/O timeout action defined, timeout ignored",
+                    timeout_cfg.name
+                );
+            }
+            DeviceTimeoutAction::HotRemove => {
+                debug!(?timeout_cfg.name, "starting hot remove");
+                timeout_cfg.hot_remove();
+            }
+        }
     }
 
     pub(crate) fn configure_timeout(&mut self) {
@@ -401,7 +435,8 @@ impl<'a> NvmeController<'a> {
             }
         };
 
-        self.set_timeout_action(action).unwrap();
+        self.set_timeout_action(DeviceTimeoutAction::HotRemove)
+            .unwrap();
 
         unsafe {
             spdk_nvme_ctrlr_register_timeout_callback(

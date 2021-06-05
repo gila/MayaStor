@@ -287,7 +287,7 @@ impl NvmeIoChannelInner<'_> {
             // Remove qpair and trigger its deallocation via drop().
             let qpair = self.qpair.take().unwrap();
             debug!(
-                "dropping qpair {:p} ({} I/O requests pending)",
+                "dropping qpair {:p} ({}) I/O requests pending)",
                 qpair.as_ptr(),
                 self.num_pending_ios
             );
