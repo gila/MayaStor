@@ -229,11 +229,19 @@ pub async fn device_monitor() {
             match w {
                 Command::RemoveDevice(nexus, child) => {
                     let rx = handle.spawn_local(async move {
-                            if let Some(n) = nexus_lookup(&nexus) {
-                                n.destroy_child(&child).await;
+                        if let Some(n) = nexus_lookup(&nexus) {
+                            if let Err(e) = n.destroy_child(&child).await {
+                                error!(?e, "destroy child failed");
                             }
+                        }
                     });
-                    rx.unwrap().await.unwrap();
+
+                    match rx {
+                        Err(e) => {
+                            error!(?e, "failed to equeue removal request")
+                        }
+                        Ok(rx) => rx.await.unwrap(),
+                    }
                 }
             }
         }
