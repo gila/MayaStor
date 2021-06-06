@@ -13,7 +13,9 @@ use spdk_sys::{
     spdk_nvme_cpl,
     spdk_nvme_ctrlr,
     spdk_nvme_ctrlr_cmd_abort,
+    spdk_nvme_ctrlr_fail,
     spdk_nvme_ctrlr_get_regs_csts,
+    spdk_nvme_ctrlr_process_admin_completions,
     spdk_nvme_ctrlr_register_timeout_callback,
     spdk_nvme_qpair,
     SPDK_BDEV_NVME_TIMEOUT_ACTION_ABORT,
@@ -68,9 +70,8 @@ pub(crate) struct TimeoutConfig {
     pub name: String,
     timeout_action: AtomicCell<DeviceTimeoutAction>,
     reset_in_progress: AtomicCell<bool>,
-    pub ctrlr: *mut spdk_nvme_ctrlr,
+    ctrlr: SpdkNvmeController,
     reset_attempts: u32,
-    errors: u32,
     next_reset_time: Instant,
 }
 
@@ -88,11 +89,30 @@ impl TimeoutConfig {
             name: String::from(ctrlr),
             timeout_action: AtomicCell::new(DeviceTimeoutAction::Ignore),
             reset_in_progress: AtomicCell::new(false),
-            ctrlr: std::ptr::null_mut(),
+            ctrlr: SpdkNvmeController(NonNull::dangling()),
             reset_attempts: MAX_RESET_ATTEMPTS,
-            errors: 0,
             next_reset_time: Instant::now(),
         }
+    }
+
+    fn as_ptr(&mut self) -> *mut c_void {
+        self as *const _ as *mut _
+    }
+
+    pub fn set_controller(&mut self, ctrlr: SpdkNvmeController) {
+        self.ctrlr = ctrlr;
+    }
+
+    pub fn process_adminq(&self) -> i32 {
+        unsafe {
+            spdk_nvme_ctrlr_process_admin_completions(self.ctrlr.as_ptr())
+        }
+    }
+
+    /// mark the contoller failed. once failed all new IO submitted will return
+    /// with EXIO.
+    fn fail(&self) {
+        self.ctrlr.fail();
     }
 
     fn reset_cb(success: bool, ctx: *mut c_void) {
@@ -133,32 +153,27 @@ impl TimeoutConfig {
     }
 
     ///
-    /// After an IO timeout, we remove will remove any qpairs associated with
+    /// After an IO timeout, we will remove any qpairs associated with
     /// this controller. This will result into to any pending IO (waiting
     /// for completion) to be aborted. While this is happening, due to the
     /// nature of the reactor, new IO sumbitted to a qpair we just detached,
-    /// will get an EXIO.
+    /// will get an EXIO, only after the the qpair is disconnected or if the
+    /// controller is failed. Therefor, we must fall thee controller as soon
+    /// as possible to avoid the need to reset after the hot removal.
 
     pub(crate) fn hot_remove(&mut self) {
+        // cb invoked when the whole process is done.
         fn hot_remove_cb(success: bool, ctx: *mut c_void) {
-            let timeout_ctx =
-                TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
+            let ctx = TimeoutConfig::from_ptr(ctx as *mut TimeoutConfig);
 
             if success {
-                info!(
-                "{} controller successfully removed in response to I/O timeout",
-                timeout_ctx.name
-            );
+                info!(?ctx.name, "all channels removed");
             }
         }
 
-        if let Some(c) = NVME_CONTROLLERS.lookup_by_name(&self.name) {
-            let mut c = c.lock();
-            c.hot_remove(
-                hot_remove_cb,
-                self as *mut TimeoutConfig as *mut c_void,
-            );
-        }
+        NVME_CONTROLLERS
+            .lookup_by_name(&self.name)
+            .map(|c| c.lock().hot_remove(hot_remove_cb, self.as_ptr()));
     }
 
     /// Resets controller exclusively, taking into account existing active
@@ -261,6 +276,10 @@ impl SpdkNvmeController {
             let csts = spdk_nvme_ctrlr_get_regs_csts(self.0.as_ptr());
             csts.bits.cfs() != 0
         }
+    }
+
+    pub fn fail(&self) {
+        unsafe { spdk_nvme_ctrlr_fail(self.0.as_ptr()) }
     }
 
     /// Abort command on a given I/O qpair.
@@ -396,6 +415,7 @@ impl<'a> NvmeController<'a> {
                 );
                 timeout_cfg.reset_controller();
             }
+
             DeviceTimeoutAction::Ignore => {
                 info!(
                     "{}: no I/O timeout action defined, timeout ignored",
