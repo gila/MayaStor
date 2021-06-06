@@ -7,7 +7,7 @@ use futures::future::FutureExt;
 use structopt::StructOpt;
 
 use mayastor::{
-    bdev::{util::uring},
+    bdev::util::uring,
     core::{
         device_monitor,
         runtime,

@@ -73,12 +73,10 @@ use snafu::{ResultExt, Snafu};
 use uuid::{self, Uuid};
 
 use crate::{
-    bdev::{
-        nexus::{
-            nexus_bdev::Nexus,
-            nexus_child::NexusChild,
-            nexus_metadata::{MetaDataError, MetaDataIndex, NexusMetaData},
-        },
+    bdev::nexus::{
+        nexus_bdev::Nexus,
+        nexus_child::NexusChild,
+        nexus_metadata::{MetaDataError, MetaDataIndex, NexusMetaData},
     },
     core::{BlockDeviceHandle, CoreError, DmaBuf, DmaError},
 };

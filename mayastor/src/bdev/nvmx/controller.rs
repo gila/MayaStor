@@ -591,7 +591,7 @@ impl<'a> NvmeController<'a> {
     }
 
     fn hot_remove_channels_done(status: i32, ctx: ResetCtx) {
-        trace!(?ctx, ?status,  "all I/O channels successfully removed");
+        trace!(?ctx, ?status, "all I/O channels successfully removed");
     }
 
     pub fn hot_remove(
